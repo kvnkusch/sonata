@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@sonata/cli",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "sonata": "./bin/sonata"
+  },
+  "scripts": {
+    "dev": "bun src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsgo --noEmit",
+    "lint": "bunx --yes oxlint --deny-warnings --tsconfig ../../tsconfig.json .",
+    "lint:fix": "bunx --yes oxlint --fix --tsconfig ../../tsconfig.json .",
+    "format": "bunx --yes oxfmt .",
+    "format:check": "bunx --yes oxfmt --check ."
+  },
+  "dependencies": {
+    "@sonata/core": "workspace:*",
+    "@clack/prompts": "1.0.0-alpha.1",
+    "yargs": "18.0.0"
+  },
+  "devDependencies": {
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@types/yargs": "catalog:",
+    "@typescript/native-preview": "catalog:",
+    "typescript": "catalog:"
+  }
+}

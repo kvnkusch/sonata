@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1772113355781,
+      "tag": "0000_0001_initial",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1772132980677,
+      "tag": "0001_0002_execution",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1772152572328,
+      "tag": "0002_0003_phase2_contract_updates",
+      "breakpoints": true
+    }
+  ]
+}

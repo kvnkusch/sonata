@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@sonata/core",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*/index.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsgo --noEmit",
+    "db": "bun drizzle-kit",
+    "db:generate": "bun run db generate",
+    "db:studio": "bun run db studio",
+    "lint": "bunx --yes oxlint --deny-warnings --tsconfig ../../tsconfig.json .",
+    "lint:fix": "bunx --yes oxlint --fix --tsconfig ../../tsconfig.json .",
+    "format": "bunx --yes oxfmt .",
+    "format:check": "bunx --yes oxfmt --check ."
+  },
+  "dependencies": {
+    "drizzle-orm": "catalog:",
+    "ulid": "catalog:",
+    "xdg-basedir": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@typescript/native-preview": "catalog:",
+    "drizzle-kit": "catalog:",
+    "typescript": "catalog:"
+  }
+}

@@ -1,0 +1,21 @@
+.DS_Store
+node_modules
+.turbo
+dist
+out
+coverage
+*.tgz
+
+# local env
+.env
+.env.*
+
+# editors
+.idea
+.vscode
+.obsidian
+
+# misc
+logs/
+tmp/
+tsconfig.tsbuildinfo
