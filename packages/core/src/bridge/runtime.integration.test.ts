@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it } from "bun:test"
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { artifactTable, closeDb, db, taskTable } from "@sonata/core/db"
-import { linkOpsRepo } from "@sonata/core/project"
-import { startTask } from "@sonata/core/task"
+import { artifactTable, closeDb, db, taskTable } from "../db"
+import { linkOpsRepo } from "../project"
+import { startStep } from "../step"
+import { startTask } from "../task"
 import { BridgeRuntimeEnvError, startupBridgeRuntime } from "./runtime"
 
 const tempDirs: string[] = []
@@ -74,11 +75,12 @@ describe("bridge runtime integration", () => {
       projectId: linked.projectId,
       workflowRef: { name: "default" },
     })
+    const step = await startStep({ taskId: started.taskId, stepKey: "plan" })
 
     const runtime = await startupBridgeRuntime({
       env: {
         SONATA_TASK_ID: started.taskId,
-        SONATA_STEP_ID: started.currentStepId,
+        SONATA_STEP_ID: step.stepId,
         SONATA_PROJECT_ROOT: projectRoot,
         SONATA_OPS_ROOT: opsRoot,
       },
@@ -109,7 +111,7 @@ describe("bridge runtime integration", () => {
       .from(taskTable)
       .all()
       .find((task) => task.taskId === started.taskId)
-    expect(taskRow?.status).toBe("completed")
+    expect(taskRow?.status).toBe("active")
   })
 
   it("fails fast when required env is missing", async () => {

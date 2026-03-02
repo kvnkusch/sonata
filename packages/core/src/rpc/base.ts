@@ -40,13 +40,20 @@ export const ProjectLinkInput = z.object({
 export const TaskStartInput = z.object({
   taskId: z.string().min(1).optional(),
   projectId: z.string().min(1),
-  workflowRef: z.object({
-    name: z.string().min(1),
-  }),
+  workflowRef: z
+    .object({
+      name: z.string().min(1),
+    })
+    .optional(),
 })
 
 export const TaskListActiveInput = z.object({
   projectId: z.string().min(1),
+})
+
+export const TaskCompleteInput = z.object({
+  taskId: z.string().min(1),
+  completionPayload: z.unknown().optional(),
 })
 
 export const StepGetToolsetInput = z.object({
@@ -70,6 +77,10 @@ export const StepStartInput = z.object({
     .optional(),
 })
 
+export const StepListInput = z.object({
+  taskId: z.string().min(1),
+})
+
 export const StepWriteArtifactInput = z.object({
   taskId: z.string().min(1),
   stepId: z.string().min(1),
@@ -84,4 +95,16 @@ export const StepCompleteInput = z.object({
   stepId: z.string().min(1),
   completionPayload: z.unknown().optional(),
   sessionId: z.string().min(1).optional(),
+})
+
+export const StepFailInput = z.object({
+  taskId: z.string().min(1),
+  stepId: z.string().min(1),
+  reason: z.string().min(1).optional(),
+  sessionId: z.string().min(1).optional(),
+})
+
+export const StepCancelInput = z.object({
+  taskId: z.string().min(1),
+  stepId: z.string().min(1),
 })

@@ -78,6 +78,7 @@ export async function startStep(input: StartStepInput, executor: DbExecutor = db
       stepKey: workflowStep.id,
       stepIndex: nextStepIndex,
       status: "active",
+      inputs: JSON.stringify(resolvedInputs),
       startedAt: now,
     })
     .run()

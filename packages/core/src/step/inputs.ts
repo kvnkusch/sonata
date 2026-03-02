@@ -2,31 +2,12 @@ import { and, asc, eq } from "drizzle-orm"
 import { artifactTable, stepTable, type DbExecutor } from "../db"
 import { ErrorCode, RpcError } from "../rpc/base"
 import type { JsonValue } from "../workflow/module"
+import type { StepInputsSnapshot } from "../workflow/module"
 import type { WorkflowStepInputs } from "../workflow/module"
 
 export type ArtifactSelectionOverride = {
   mode: "latest" | "all" | "indices"
   indices?: number[]
-}
-
-export type StartStepResolvedInputs = {
-  invocation: JsonValue | null
-  artifacts: Record<
-    string,
-    {
-      mode: "single" | "multiple"
-      selectedBy: ArtifactSelectionOverride["mode"]
-      refs: Array<{
-        artifactName: string
-        artifactKind: "markdown" | "json"
-        relativePath: string
-        stepId: string
-        stepKey: string
-        stepIndex: number
-        writtenAt: number
-      }>
-    }
-  >
 }
 
 type ArtifactCandidate = {
@@ -99,9 +80,9 @@ export async function resolveStepInputs(input: {
   invocation?: unknown
   artifactSelections?: Record<string, ArtifactSelectionOverride>
   executor: DbExecutor
-}): Promise<StartStepResolvedInputs> {
+}): Promise<StepInputsSnapshot> {
   const artifactBindings = input.stepInputs?.artifacts ?? []
-  const resolved: StartStepResolvedInputs = {
+  const resolved: StepInputsSnapshot = {
     invocation: null,
     artifacts: {},
   }

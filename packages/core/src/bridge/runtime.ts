@@ -1,4 +1,4 @@
-import { createCaller } from "@sonata/core/rpc"
+import { createCaller } from "../rpc"
 
 export class BridgeRuntimeEnvError extends Error {
   constructor(readonly envVar: string) {
@@ -43,9 +43,10 @@ export function resolveBridgeRuntimeEnv(env: Record<string, string | undefined> 
 
 export async function startupBridgeRuntime(input?: {
   env?: Record<string, string | undefined>
+  runtimeEnv?: BridgeRuntimeEnv
   caller?: ReturnType<typeof createCaller>
 }) {
-  const runtimeEnv = resolveBridgeRuntimeEnv(input?.env ?? process.env)
+  const runtimeEnv = input?.runtimeEnv ?? resolveBridgeRuntimeEnv(input?.env ?? process.env)
   const caller = input?.caller ?? createCaller()
 
   const toolset = await caller.step.getToolset({

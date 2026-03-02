@@ -1,4 +1,6 @@
 export { listActiveTasks } from "./list-active"
 export type { ActiveTaskSummary } from "./list-active"
+export { completeTask } from "./complete"
+export type { CompleteTaskInput } from "./complete"
 export { startTask } from "./start"
 export type { StartTaskInput, StartedTask } from "./start"

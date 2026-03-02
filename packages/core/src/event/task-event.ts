@@ -7,6 +7,8 @@ export const TaskEventType = {
   ARTIFACT_WRITTEN: "artifact.written",
   STEP_COMPLETION_REJECTED: "step.completion.rejected",
   STEP_COMPLETED: "step.completed",
+  STEP_FAILED: "step.failed",
+  STEP_CANCELLED: "step.cancelled",
   TASK_COMPLETED: "task.completed",
   TASK_FAILED: "task.failed",
 } as const

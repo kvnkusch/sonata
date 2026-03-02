@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { artifactTable, closeDb, db, stepTable, taskTable } from "@sonata/core/db"
-import { startupBridgeRuntime } from "../../bridge/runtime"
+import { startupBridgeRuntime } from "@sonata/core/bridge"
 
 const tempDirs: string[] = []
 
@@ -93,7 +93,10 @@ describe("task flow cli integration", () => {
 
     const startStderr = Buffer.from(start.stderr).toString("utf8")
     const taskId = parseKey(startStderr, "task_id")
-    const stepId = parseKey(startStderr, "step_id")
+
+    const stepStart = runCli(["step", "start", "plan", "--task-id", taskId], env)
+    expect(stepStart.exitCode).toBe(0)
+    const stepId = parseKey(Buffer.from(stepStart.stderr).toString("utf8"), "step_id")
 
     const listed = runCli(["task", "list", "--project-id", "prj_flow"], env)
     expect(listed.exitCode).toBe(0)
@@ -129,7 +132,7 @@ describe("task flow cli integration", () => {
       .from(taskTable)
       .all()
       .find((task) => task.taskId === taskId)
-    expect(taskRow?.status).toBe("completed")
+    expect(taskRow?.status).toBe("active")
     expect(
       db()
         .select()

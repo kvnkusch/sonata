@@ -19,6 +19,8 @@
     "format:check": "bunx --yes oxfmt --check ."
   },
   "dependencies": {
+    "@opencode-ai/plugin": "catalog:",
+    "@opencode-ai/sdk": "catalog:",
     "drizzle-orm": "catalog:",
     "ulid": "catalog:",
     "xdg-basedir": "catalog:",

@@ -6,6 +6,7 @@ export {
   defineWorkflowStep,
   isSonataWorkflowModule,
   openCodeConfig,
+  stepResult,
 } from "./module"
 
 export type {
@@ -21,8 +22,14 @@ export type {
   StepBlockedEvent,
   StepCompletedEvent,
   StepContextBase,
+  StepInputsSnapshot,
+  StepInputsSnapshotArtifactRef,
+  StepInputsSnapshotArtifactSelectionMode,
   StepContextWithOpenCode,
   StepFailedEvent,
+  StepRunComplete,
+  StepRunFail,
+  StepRunResult,
   StepStartedEvent,
   WorkflowStep,
   WorkflowStepArtifact,
@@ -43,3 +50,5 @@ export {
   primeWorkflowForTaskStart,
 } from "./loader"
 export type { LoadedWorkflow } from "./loader"
+export { readOpsConfig } from "./config"
+export type { OpsConfig, OpsWorkflowModuleConfig } from "./config"

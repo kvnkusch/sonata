@@ -1,28 +1,15 @@
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { eq } from "drizzle-orm"
-import z from "zod"
 import { type DbExecutor, db } from "../db"
 import { projectTable } from "../db/project.sql"
 import { taskTable } from "../db/task.sql"
+import { readOpsConfig } from "./config"
 import {
   assertSonataWorkflowModule,
   type SonataWorkflowModule,
   type WorkflowStep,
 } from "./module"
-
-const WorkflowModuleConfigSchema = z.object({
-  id: z.string().min(1),
-  path: z.string().min(1),
-})
-
-const SonataOpsConfigSchema = z.object({
-  version: z.literal(1),
-  defaultWorkflowId: z.string().min(1),
-  workflowModules: z.array(WorkflowModuleConfigSchema).min(1),
-})
-
-type SonataOpsConfig = z.infer<typeof SonataOpsConfigSchema>
 
 export type LoadedWorkflow = {
   taskId?: string
@@ -34,28 +21,11 @@ export type LoadedWorkflow = {
 
 const workflowCacheByTask = new Map<string, LoadedWorkflow>()
 
-async function readSonataOpsConfig(opsRootRealpath: string): Promise<{
-  configPath: string
-  config: SonataOpsConfig
-}> {
-  const configPath = path.resolve(opsRootRealpath, "config.json")
-  const file = Bun.file(configPath)
-  if (!(await file.exists())) {
-    throw new Error(`Missing Sonata ops repo config: ${configPath}`)
-  }
-
-  const raw = await file.json()
-  return {
-    configPath,
-    config: SonataOpsConfigSchema.parse(raw),
-  }
-}
-
 async function loadWorkflowFromOpsRepo(input: {
   opsRootRealpath: string
   workflowName: string
 }): Promise<LoadedWorkflow> {
-  const discovered = await readSonataOpsConfig(input.opsRootRealpath)
+  const discovered = await readOpsConfig(input.opsRootRealpath)
   const selected =
     discovered.config.workflowModules.find((module) => module.id === input.workflowName) ??
     null

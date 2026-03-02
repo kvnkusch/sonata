@@ -47,6 +47,32 @@ export type WriteArtifactInput = {
   sessionId?: string
 }
 
+export type WriteArtifactFromExecutionContextInput = {
+  taskId: string
+  stepId: string
+  slug: string
+  kind: "markdown" | "json"
+  payload: { markdown: string } | { data: unknown }
+  sessionId?: string
+}
+
+export function writeArtifactFromExecutionContext(
+  input: WriteArtifactFromExecutionContextInput,
+  executor: DbExecutor = db(),
+) {
+  return writeStepArtifact(
+    {
+      taskId: input.taskId,
+      stepId: input.stepId,
+      artifactName: input.slug,
+      artifactKind: input.kind,
+      payload: input.payload,
+      sessionId: input.sessionId,
+    },
+    executor,
+  )
+}
+
 export async function writeStepArtifact(input: WriteArtifactInput, executor: DbExecutor = db()) {
   const task = executor.select().from(taskTable).where(eq(taskTable.taskId, input.taskId)).get()
   if (!task) {

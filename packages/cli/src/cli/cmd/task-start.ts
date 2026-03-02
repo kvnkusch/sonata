@@ -4,18 +4,17 @@ import { cmd } from "./cmd"
 import { UI } from "../ui"
 
 type TaskStartArgs = {
-  workflow: string
+  workflow?: string
   "project-id": string
 }
 
 export const TaskStartCommand = cmd<object, TaskStartArgs>({
-  command: "start <workflow>",
+  command: "start [workflow]",
   describe: "Start a workflow task",
   builder: (y: Argv<object>) =>
     y
       .positional("workflow", {
         type: "string",
-        demandOption: true,
         describe: "Workflow name",
       })
       .option("project-id", {
@@ -27,12 +26,11 @@ export const TaskStartCommand = cmd<object, TaskStartArgs>({
     const caller = createCaller()
     const started = await caller.task.start({
       projectId: args["project-id"],
-      workflowRef: { name: args.workflow },
+      workflowRef: args.workflow ? { name: args.workflow } : undefined,
     })
 
     UI.println("task_id:", started.taskId)
     UI.println("project_id:", started.projectId)
     UI.println("workflow:", started.workflowName)
-    UI.println("step_id:", started.currentStepId)
   },
 })

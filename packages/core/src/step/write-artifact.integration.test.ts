@@ -7,6 +7,7 @@ import { artifactTable, closeDb, db, taskEventTable } from "../db"
 import { linkOpsRepo } from "../project"
 import { ErrorCode } from "../rpc/base"
 import { startTask } from "../task"
+import { startStep } from "./start"
 import { writeStepArtifact } from "./write-artifact"
 
 const tempDirs: string[] = []
@@ -82,10 +83,11 @@ describe("step.writeArtifact integration", () => {
       projectId: linked.projectId,
       workflowRef: { name: "default" },
     })
+    const initial = await startStep({ taskId: started.taskId, stepKey: "plan" })
 
     const markdownResult = await writeStepArtifact({
       taskId: started.taskId,
-      stepId: started.currentStepId,
+      stepId: initial.stepId,
       artifactName: "ticket_summary",
       artifactKind: "markdown",
       payload: { markdown: "## Ticket Summary" },
@@ -94,7 +96,7 @@ describe("step.writeArtifact integration", () => {
 
     const jsonResult = await writeStepArtifact({
       taskId: started.taskId,
-      stepId: started.currentStepId,
+      stepId: initial.stepId,
       artifactName: "plan_structured",
       artifactKind: "json",
       payload: { data: { bullets: ["a", "b"] } },
@@ -137,10 +139,11 @@ describe("step.writeArtifact integration", () => {
       projectId: linked.projectId,
       workflowRef: { name: "default" },
     })
+    const initial = await startStep({ taskId: started.taskId, stepKey: "plan" })
 
     const first = await writeStepArtifact({
       taskId: started.taskId,
-      stepId: started.currentStepId,
+      stepId: initial.stepId,
       artifactName: "ticket_summary",
       artifactKind: "markdown",
       payload: { markdown: "First write" },
@@ -148,7 +151,7 @@ describe("step.writeArtifact integration", () => {
 
     const replay = await writeStepArtifact({
       taskId: started.taskId,
-      stepId: started.currentStepId,
+      stepId: initial.stepId,
       artifactName: "ticket_summary",
       artifactKind: "markdown",
       payload: { markdown: "First write" },
@@ -161,7 +164,7 @@ describe("step.writeArtifact integration", () => {
     await expect(
       writeStepArtifact({
         taskId: started.taskId,
-        stepId: started.currentStepId,
+        stepId: initial.stepId,
         artifactName: "ticket_summary",
         artifactKind: "markdown",
         payload: { markdown: "Second write" },
@@ -191,18 +194,22 @@ describe("step.writeArtifact integration", () => {
       startTask({ projectId: linked.projectId, workflowRef: { name: "default" } }),
       startTask({ projectId: linked.projectId, workflowRef: { name: "default" } }),
     ])
+    const [stepA, stepB] = await Promise.all([
+      startStep({ taskId: taskA.taskId, stepKey: "plan" }),
+      startStep({ taskId: taskB.taskId, stepKey: "plan" }),
+    ])
 
     const [resultA, resultB] = await Promise.all([
       writeStepArtifact({
         taskId: taskA.taskId,
-        stepId: taskA.currentStepId,
+        stepId: stepA.stepId,
         artifactName: "ticket_summary",
         artifactKind: "markdown",
         payload: { markdown: "Task A" },
       }),
       writeStepArtifact({
         taskId: taskB.taskId,
-        stepId: taskB.currentStepId,
+        stepId: stepB.stepId,
         artifactName: "ticket_summary",
         artifactKind: "markdown",
         payload: { markdown: "Task B" },

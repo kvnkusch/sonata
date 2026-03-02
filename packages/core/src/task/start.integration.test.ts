@@ -17,7 +17,7 @@ afterEach(() => {
 })
 
 describe("task.start integration", () => {
-  it("links project and creates initial task + step rows", async () => {
+  it("links project and creates initial task row without auto-step", async () => {
     const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-start-"))
     tempDirs.push(sandbox)
 
@@ -79,12 +79,9 @@ describe("task.start integration", () => {
 
     expect(projects.length).toBe(1)
     expect(tasks.length).toBe(1)
-    expect(steps.length).toBe(1)
+    expect(steps.length).toBe(0)
     expect(tasks[0]?.status).toBe("active")
-    expect(steps[0]?.stepIndex).toBe(1)
-    expect(steps[0]?.stepKey).toBe("plan")
     expect(started.taskId).toStartWith("tsk_")
-    expect(started.currentStepId).toStartWith("stp_")
   })
 
   it("replays start idempotently for a client-provided task id", async () => {
@@ -151,8 +148,7 @@ describe("task.start integration", () => {
 
     expect(first.taskId).toBe(taskId)
     expect(replay.taskId).toBe(taskId)
-    expect(replay.currentStepId).toBe(first.currentStepId)
     expect(db().select().from(taskTable).all()).toHaveLength(1)
-    expect(db().select().from(stepTable).all()).toHaveLength(1)
+    expect(db().select().from(stepTable).all()).toHaveLength(0)
   })
 })

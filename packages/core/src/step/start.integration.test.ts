@@ -152,6 +152,7 @@ describe("step.start integration", () => {
     })
 
     const started = await startTask({ projectId: linked.projectId, workflowRef: { name: "default" } })
+    const initial = await startStep({ taskId: started.taskId, stepKey: "plan" })
 
     await expect(
       startStep({
@@ -164,12 +165,12 @@ describe("step.start integration", () => {
 
     await writeStepArtifact({
       taskId: started.taskId,
-      stepId: started.currentStepId,
+      stepId: initial.stepId,
       artifactName: "plan_summary",
       artifactKind: "markdown",
       payload: { markdown: "done" },
     })
-    await completeStep({ taskId: started.taskId, stepId: started.currentStepId })
+    await completeStep({ taskId: started.taskId, stepId: initial.stepId })
 
     const selected = await startStep({
       taskId: started.taskId,
@@ -210,15 +211,16 @@ describe("step.start integration", () => {
     })
 
     const started = await startTask({ projectId: linked.projectId, workflowRef: { name: "default" } })
+    const initial = await startStep({ taskId: started.taskId, stepKey: "intake" })
 
     await writeStepArtifact({
       taskId: started.taskId,
-      stepId: started.currentStepId,
+      stepId: initial.stepId,
       artifactName: "topic",
       artifactKind: "markdown",
       payload: { markdown: "topic v1" },
     })
-    await completeStep({ taskId: started.taskId, stepId: started.currentStepId })
+    await completeStep({ taskId: started.taskId, stepId: initial.stepId })
 
     const intakeReplay = await startStep({ taskId: started.taskId, stepKey: "intake" })
     await writeStepArtifact({
@@ -242,6 +244,9 @@ describe("step.start integration", () => {
     expect(planStart.resolvedInputs.invocation).toEqual({ strictness: "medium" })
     expect(planStart.resolvedInputs.artifacts.topic!.refs).toHaveLength(1)
     expect(planStart.resolvedInputs.artifacts.topic!.refs[0]?.relativePath).toContain("002-intake-topic.md")
+    const planRow = db().select().from(stepTable).where(eq(stepTable.stepId, planStart.stepId)).get()
+    expect(planRow).toBeDefined()
+    expect(JSON.parse(planRow!.inputs)).toEqual(planStart.resolvedInputs)
 
     await completeStep({ taskId: started.taskId, stepId: planStart.stepId })
 

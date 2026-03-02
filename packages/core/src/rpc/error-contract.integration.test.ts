@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { closeDb, db } from "../db"
 import { linkOpsRepo } from "../project"
+import { startStep } from "../step"
 import { ErrorCode } from "./base"
 import { createCaller } from "./caller"
 
@@ -76,11 +77,12 @@ describe("rpc error contract", () => {
       projectId: linked.projectId,
       workflowRef: { name: "default" },
     })
+    const initial = await startStep({ taskId: started.taskId, stepKey: "plan" })
 
     await expect(
       caller.step.writeArtifact({
         taskId: started.taskId,
-        stepId: started.currentStepId,
+        stepId: initial.stepId,
         artifactName: "not_declared",
         artifactKind: "markdown",
         payload: { markdown: "x" },
@@ -94,7 +96,7 @@ describe("rpc error contract", () => {
     await expect(
       caller.step.complete({
         taskId: started.taskId,
-        stepId: started.currentStepId,
+        stepId: initial.stepId,
       }),
     ).rejects.toMatchObject({
       code: ErrorCode.REQUIRED_ARTIFACT_MISSING,
@@ -104,7 +106,7 @@ describe("rpc error contract", () => {
 
     await caller.step.writeArtifact({
       taskId: started.taskId,
-      stepId: started.currentStepId,
+      stepId: initial.stepId,
       artifactName: "ticket_summary",
       artifactKind: "markdown",
       payload: { markdown: "ready" },
@@ -112,13 +114,13 @@ describe("rpc error contract", () => {
 
     await caller.step.complete({
       taskId: started.taskId,
-      stepId: started.currentStepId,
+      stepId: initial.stepId,
     })
 
     await expect(
       caller.step.complete({
         taskId: started.taskId,
-        stepId: started.currentStepId,
+        stepId: initial.stepId,
       }),
     ).rejects.toMatchObject({
       code: ErrorCode.INVALID_STEP_TRANSITION,

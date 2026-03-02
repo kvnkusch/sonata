@@ -72,6 +72,6 @@ describe("task start cli", () => {
     )
     expect(startResult.exitCode).toBe(0)
     expect(Buffer.from(startResult.stderr).toString()).toContain("task_id: tsk_")
-    expect(Buffer.from(startResult.stderr).toString()).toContain("step_id: stp_")
+    expect(Buffer.from(startResult.stderr).toString()).toContain("workflow: default")
   })
 })

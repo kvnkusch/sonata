@@ -19,6 +19,8 @@
       "packages/*"
     ],
     "catalog": {
+      "@opencode-ai/plugin": "1.2.11",
+      "@opencode-ai/sdk": "1.2.11",
       "@tsconfig/bun": "1.0.9",
       "@types/bun": "1.3.9",
       "@types/yargs": "17.0.33",

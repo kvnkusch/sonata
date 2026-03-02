@@ -22,6 +22,20 @@
       "when": 1772152572328,
       "tag": "0002_0003_phase2_contract_updates",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1772210000000,
+      "tag": "0003_0004_step_opencode_base_url",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1772300000000,
+      "tag": "0004_0005_step_inputs",
+      "breakpoints": true
     }
   ]
 }

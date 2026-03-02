@@ -19,6 +19,59 @@ export type ArtifactRef = {
   path: string
 }
 
+export type StepInputsSnapshotArtifactRef = {
+  artifactName: string
+  artifactKind: ArtifactKind
+  relativePath: string
+  stepId: string
+  stepKey: string
+  stepIndex: number
+  writtenAt: number
+}
+
+export type StepInputsSnapshotArtifactSelectionMode = "latest" | "all" | "indices"
+
+export type StepInputsSnapshot = {
+  invocation: JsonValue | null
+  artifacts: Record<
+    string,
+    {
+      mode: "single" | "multiple"
+      selectedBy: StepInputsSnapshotArtifactSelectionMode
+      refs: StepInputsSnapshotArtifactRef[]
+    }
+  >
+}
+
+export type StepRunComplete = {
+  status: "completed"
+  completionPayload?: unknown
+}
+
+export type StepRunFail = {
+  status: "failed"
+  reason: string
+  details?: unknown
+}
+
+export type StepRunResult = StepRunComplete | StepRunFail
+
+export const stepResult = {
+  completed(input?: { completionPayload?: unknown }): StepRunComplete {
+    return {
+      status: "completed",
+      completionPayload: input?.completionPayload,
+    }
+  },
+  failed(input: { reason: string; details?: unknown }): StepRunFail {
+    return {
+      status: "failed",
+      reason: input.reason,
+      details: input.details,
+    }
+  },
+}
+
 export type StepStartedEvent = { type: "step.started" }
 export type StepBlockedEvent = { type: "step.blocked" }
 export type StepCompletedEvent = { type: "step.completed" }
@@ -109,6 +162,7 @@ export type StepContextBase = {
   repoRoot: string
   taskId: string
   stepId: string
+  inputs: StepInputsSnapshot
   writeMarkdownArtifact: (params: {
     slug: string
     markdown: string
@@ -118,6 +172,8 @@ export type StepContextBase = {
     data: JsonValue
     schema?: JsonSchema
   }) => Promise<ArtifactRef>
+  completeStep: (payload?: unknown) => Promise<unknown>
+  completeTask?: (payload?: unknown) => Promise<unknown>
 }
 
 export type StepContextWithOpenCode = StepContextBase & {
@@ -133,7 +189,7 @@ export type WorkflowStepWithoutOpenCode = {
   next?: string
   inputs?: WorkflowStepInputs
   artifacts?: WorkflowStepArtifact[]
-  run: (ctx: StepContextBase) => Promise<void> | void
+  run: (ctx: StepContextBase) => Promise<StepRunResult | void> | StepRunResult | void
   on: (ctx: StepContextBase, event: StepBaseEvent) => Promise<void> | void
   opencode?: undefined
 }
@@ -146,7 +202,7 @@ export type WorkflowStepWithOpenCode = {
   inputs?: WorkflowStepInputs
   artifacts?: WorkflowStepArtifact[]
   opencode: OpenCodeConfig
-  run: (ctx: StepContextWithOpenCode) => Promise<void> | void
+  run: (ctx: StepContextWithOpenCode) => Promise<StepRunResult | void> | StepRunResult | void
   on: (
     ctx: StepContextWithOpenCode,
     event: StepBaseEvent | OpenCodeStartedEvent | OpenCodeCompleteEvent,

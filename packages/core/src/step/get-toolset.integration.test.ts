@@ -6,6 +6,7 @@ import { closeDb, db } from "../db"
 import { linkOpsRepo } from "../project"
 import { startTask } from "../task"
 import { getStepToolset } from "./get-toolset"
+import { startStep } from "./start"
 
 const tempDirs: string[] = []
 
@@ -74,14 +75,15 @@ describe("step.getToolset integration", () => {
       projectId: linked.projectId,
       workflowRef: { name: "default" },
     })
+    const initial = await startStep({ taskId: started.taskId, stepKey: "plan" })
 
     const toolsetA = await getStepToolset({
       taskId: started.taskId,
-      stepId: started.currentStepId,
+      stepId: initial.stepId,
     })
     const toolsetB = await getStepToolset({
       taskId: started.taskId,
-      stepId: started.currentStepId,
+      stepId: initial.stepId,
     })
 
     expect(toolsetA).toEqual(toolsetB)

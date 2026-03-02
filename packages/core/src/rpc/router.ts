@@ -1,18 +1,22 @@
 import { db } from "../db"
 import { getProjectById, linkOpsRepo } from "../project"
 import { resolveFromCwd } from "../scope"
-import { completeStep, getStepToolset, startStep, writeStepArtifact } from "../step"
-import { listActiveTasks, startTask } from "../task"
+import { cancelStep, completeStep, failStep, getStepToolset, listStepsForTask, startStep, writeStepArtifact } from "../step"
+import { completeTask, listActiveTasks, startTask } from "../task"
 import {
   ErrorCode,
   ProjectLinkInput,
   RpcError,
   ScopeResolveInput,
+  StepCancelInput,
   StepCompleteInput,
+  StepFailInput,
   StepGetToolsetInput,
+  StepListInput,
   StepStartInput,
   StepWriteArtifactInput,
   TaskListActiveInput,
+  TaskCompleteInput,
   TaskStartInput,
 } from "./base"
 
@@ -80,6 +84,13 @@ export const router = {
         return listActiveTasks(parsed.data, tx)
       })
     },
+    complete(input: unknown) {
+      const parsed = TaskCompleteInput.safeParse(input)
+      if (!parsed.success) {
+        throw invalidInput(parsed.error)
+      }
+      return completeTask(parsed.data)
+    },
   },
   step: {
     async start(input: unknown) {
@@ -88,6 +99,13 @@ export const router = {
         throw invalidInput(parsed.error)
       }
       return startStep(parsed.data)
+    },
+    list(input: unknown) {
+      const parsed = StepListInput.safeParse(input)
+      if (!parsed.success) {
+        throw invalidInput(parsed.error)
+      }
+      return listStepsForTask(parsed.data)
     },
     async getToolset(input: unknown) {
       const parsed = StepGetToolsetInput.safeParse(input)
@@ -109,6 +127,20 @@ export const router = {
         throw invalidInput(parsed.error)
       }
       return completeStep(parsed.data)
+    },
+    fail(input: unknown) {
+      const parsed = StepFailInput.safeParse(input)
+      if (!parsed.success) {
+        throw invalidInput(parsed.error)
+      }
+      return failStep(parsed.data)
+    },
+    cancel(input: unknown) {
+      const parsed = StepCancelInput.safeParse(input)
+      if (!parsed.success) {
+        throw invalidInput(parsed.error)
+      }
+      return cancelStep(parsed.data)
     },
   },
 }

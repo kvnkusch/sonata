@@ -83,11 +83,12 @@ describe("step.complete integration", () => {
       return linkOpsRepo({ projectRoot, opsRoot, projectId: "prj_complete_missing" }, tx)
     })
     const started = await startTask({ projectId: linked.projectId, workflowRef: { name: "default" } })
+    const initial = await startStep({ taskId: started.taskId, stepKey: "plan" })
 
     await expect(
       completeStep({
         taskId: started.taskId,
-        stepId: started.currentStepId,
+        stepId: initial.stepId,
       }),
     ).rejects.toMatchObject({
       code: ErrorCode.REQUIRED_ARTIFACT_MISSING,
@@ -117,10 +118,11 @@ describe("step.complete integration", () => {
       return linkOpsRepo({ projectRoot, opsRoot, projectId: "prj_complete_success" }, tx)
     })
     const started = await startTask({ projectId: linked.projectId, workflowRef: { name: "default" } })
+    const initial = await startStep({ taskId: started.taskId, stepKey: "plan" })
 
     await writeStepArtifact({
       taskId: started.taskId,
-      stepId: started.currentStepId,
+      stepId: initial.stepId,
       artifactName: "plan_summary",
       artifactKind: "markdown",
       payload: { markdown: "done" },
@@ -128,7 +130,7 @@ describe("step.complete integration", () => {
 
     const firstComplete = await completeStep({
       taskId: started.taskId,
-      stepId: started.currentStepId,
+      stepId: initial.stepId,
       completionPayload: { ok: true },
     })
 

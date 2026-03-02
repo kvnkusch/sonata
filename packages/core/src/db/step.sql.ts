@@ -14,6 +14,8 @@ export const stepTable = sqliteTable(
       enum: ["pending", "active", "completed", "failed", "cancelled"],
     }).notNull(),
     sessionId: text("session_id").unique(),
+    opencodeBaseUrl: text("opencode_base_url"),
+    inputs: text("inputs").notNull().default("{}"),
     startedAt: integer("started_at").notNull(),
     completedAt: integer("completed_at"),
     completionPayloadJson: text("completion_payload_json"),
