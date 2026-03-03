@@ -21,6 +21,7 @@
   "dependencies": {
     "@opencode-ai/plugin": "catalog:",
     "@opencode-ai/sdk": "catalog:",
+    "@sonata/workflow": "workspace:*",
     "drizzle-orm": "catalog:",
     "ulid": "catalog:",
     "xdg-basedir": "catalog:",

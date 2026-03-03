@@ -14,6 +14,8 @@ function makeCallerStub(overrides?: any): ReturnType<typeof createCaller> {
         status: "active" as const,
       }),
       listActive: () => [],
+      complete: () => ({ taskId: "tsk_default", status: "completed" as const }),
+      delete: () => ({ taskId: "tsk_default", status: "deleted" as const }),
     },
     step: {
       start: async () => ({ stepId: "stp_default" }),
@@ -240,6 +242,189 @@ describe("interactive effect runner", () => {
       status: "blocked",
       suggestedNextStepKey: "implement",
     })
+  })
+
+  it("maps task continuation selections to lifecycle events", async () => {
+    const runComplete = createEffectRunner({
+      prompts: makePrompts("complete"),
+      ui: { println() {}, error() {} },
+      async ensureLinkedProject() {
+        return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
+      },
+      async loadWorkflowForTask() {
+        return { workflow: { steps: [] } } as never
+      },
+      async collectStepInputs() {
+        return {}
+      },
+      async executeStep() {
+        return { status: "completed", suggestedNextStepKey: null }
+      },
+      async attachOpencodeTui() {},
+    })
+
+    const completeResult = await runComplete({ type: "PROMPT_TASK_CONTINUATION", taskId: "tsk_1" }, makeRuntime())
+    expect(completeResult).toEqual([{ type: "TASK_CONTINUE_COMPLETE" }])
+
+    const runDelete = createEffectRunner({
+      prompts: makePrompts("delete"),
+      ui: { println() {}, error() {} },
+      async ensureLinkedProject() {
+        return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
+      },
+      async loadWorkflowForTask() {
+        return { workflow: { steps: [] } } as never
+      },
+      async collectStepInputs() {
+        return {}
+      },
+      async executeStep() {
+        return { status: "completed", suggestedNextStepKey: null }
+      },
+      async attachOpencodeTui() {},
+    })
+
+    const deleteResult = await runDelete({ type: "PROMPT_TASK_CONTINUATION", taskId: "tsk_1" }, makeRuntime())
+    expect(deleteResult).toEqual([{ type: "TASK_CONTINUE_DELETE" }])
+  })
+
+  it("runs task complete and delete effects", async () => {
+    const caller = makeCallerStub()
+    const runEffect = createEffectRunner({
+      prompts: makePrompts("unused"),
+      ui: { println() {}, error() {} },
+      async ensureLinkedProject() {
+        return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
+      },
+      async loadWorkflowForTask() {
+        return { workflow: { steps: [] } } as never
+      },
+      async collectStepInputs() {
+        return {}
+      },
+      async executeStep() {
+        return { status: "completed", suggestedNextStepKey: null }
+      },
+      async attachOpencodeTui() {},
+    })
+
+    const runtime = makeRuntime(caller)
+    await expect(runEffect({ type: "COMPLETE_TASK", taskId: "tsk_1" }, runtime)).resolves.toEqual([
+      { type: "TASK_COMPLETE_OK" },
+    ])
+    await expect(runEffect({ type: "DELETE_TASK", taskId: "tsk_1" }, runtime)).resolves.toEqual([
+      { type: "TASK_DELETE_OK" },
+    ])
+  })
+
+  it("returns USER_BACK when choosing back from step selection", async () => {
+    const runEffect = createEffectRunner({
+      prompts: makePrompts("__back_to_task_menu__"),
+      ui: { println() {}, error() {} },
+      async ensureLinkedProject() {
+        return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
+      },
+      async loadWorkflowForTask() {
+        return { workflow: { steps: [{ id: "intake" }] } } as never
+      },
+      async collectStepInputs() {
+        return {}
+      },
+      async executeStep() {
+        return { status: "completed", suggestedNextStepKey: null }
+      },
+      async attachOpencodeTui() {},
+    })
+
+    const result = await runEffect({ type: "PROMPT_SELECT_STEP", taskId: "tsk_1" }, makeRuntime())
+    expect(result).toEqual([{ type: "USER_BACK" }])
+  })
+
+  it("derives suggested step from current step statuses", async () => {
+    let observedInitialValue: unknown
+    const caller = makeCallerStub({
+      step: {
+        list: () => [
+          {
+            stepId: "stp_1",
+            stepKey: "intake",
+            stepIndex: 1,
+            status: "completed",
+            startedAt: 1,
+            completedAt: 2,
+          },
+        ],
+      },
+    })
+    const runEffect = createEffectRunner({
+      prompts: {
+        async select<Value>(opts: { initialValue?: unknown }): Promise<Value> {
+          observedInitialValue = opts.initialValue
+          return "research" as Value
+        },
+        isCancel(value: unknown) {
+          return value === CANCEL
+        },
+        outro() {},
+      },
+      ui: { println() {}, error() {} },
+      async ensureLinkedProject() {
+        return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
+      },
+      async loadWorkflowForTask() {
+        return { workflow: { steps: [{ id: "intake" }, { id: "research" }] } } as never
+      },
+      async collectStepInputs() {
+        return {}
+      },
+      async executeStep() {
+        return { status: "completed", suggestedNextStepKey: null }
+      },
+      async attachOpencodeTui() {},
+    })
+
+    const result = await runEffect({ type: "PROMPT_SELECT_STEP", taskId: "tsk_1" }, makeRuntime(caller))
+    expect(observedInitialValue).toBe("research")
+    expect(result).toEqual([{ type: "STEP_SELECTED", stepKey: "research" }])
+  })
+
+  it("checks step activity against current DB status", async () => {
+    const activeCaller = makeCallerStub({
+      step: {
+        list: () => [{ stepId: "stp_1", status: "active" }],
+      },
+    })
+    const inactiveCaller = makeCallerStub({
+      step: {
+        list: () => [{ stepId: "stp_1", status: "completed" }],
+      },
+    })
+
+    const runEffect = createEffectRunner({
+      prompts: makePrompts("unused"),
+      ui: { println() {}, error() {} },
+      async ensureLinkedProject() {
+        return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
+      },
+      async loadWorkflowForTask() {
+        return { workflow: { steps: [] } } as never
+      },
+      async collectStepInputs() {
+        return {}
+      },
+      async executeStep() {
+        return { status: "completed", suggestedNextStepKey: null }
+      },
+      async attachOpencodeTui() {},
+    })
+
+    await expect(
+      runEffect({ type: "CHECK_STEP_ACTIVE", taskId: "tsk_1", stepId: "stp_1" }, makeRuntime(activeCaller)),
+    ).resolves.toEqual([{ type: "STEP_STILL_ACTIVE", active: true }])
+
+    await expect(
+      runEffect({ type: "CHECK_STEP_ACTIVE", taskId: "tsk_1", stepId: "stp_1" }, makeRuntime(inactiveCaller)),
+    ).resolves.toEqual([{ type: "STEP_STILL_ACTIVE", active: false }])
   })
 
   it("prints status with step index/name/status", async () => {

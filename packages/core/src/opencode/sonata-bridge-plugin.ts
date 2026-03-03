@@ -18,18 +18,7 @@ function toToolArgsSchema(inputSchema: Record<string, unknown>): Record<string, 
 }
 
 export const SonataBridgePlugin: Plugin = async () => {
-  const params = new URL(import.meta.url).searchParams
-  const runtime = await startupBridgeRuntime({
-    runtimeEnv:
-      params.get("taskId") && params.get("stepId")
-        ? {
-            taskId: params.get("taskId")!,
-            stepId: params.get("stepId")!,
-            projectRoot: params.get("projectRoot") ?? undefined,
-            opsRoot: params.get("opsRoot") ?? undefined,
-          }
-        : undefined,
-  })
+  const runtime = await startupBridgeRuntime()
   const dynamicTools: Record<string, ReturnType<typeof tool>> = {}
 
   for (const item of runtime.tools) {

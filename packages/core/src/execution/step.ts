@@ -2,6 +2,7 @@ import { createServer } from "node:net"
 import { createOpencodeClient, createOpencodeServer, type Config } from "@opencode-ai/sdk/v2"
 import { eq } from "drizzle-orm"
 import { db, projectTable, stepTable, taskTable, type DbExecutor } from "../db"
+import { composeOpenCodeKickoffPrompt } from "./opencode-framework-prompt"
 import { staticSonataBridgePluginUrl } from "../opencode"
 import { ErrorCode, RpcError } from "../rpc/base"
 import { completeStep, failStep, parseStepInputsSnapshot, setStepSession, writeArtifactFromExecutionContext } from "../step"
@@ -40,6 +41,8 @@ type ActiveOpenCodeSession = {
   reused: boolean
   close?: () => void
 }
+
+const REQUIRED_SONATA_TOOL_ID = "sonata_complete_step"
 
 function isOpenCodeStep(step: unknown): step is WorkflowStepWithOpenCode {
   return typeof step === "object" && step !== null && "opencode" in step
@@ -114,6 +117,29 @@ async function canReuseExistingSession(input: {
     return true
   } catch {
     return false
+  }
+}
+
+async function withTemporaryEnv<T>(
+  vars: Record<string, string>,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous = new Map<string, string | undefined>()
+  for (const [key, value] of Object.entries(vars)) {
+    previous.set(key, process.env[key])
+    process.env[key] = value
+  }
+
+  try {
+    return await run()
+  } finally {
+    for (const [key, value] of previous.entries()) {
+      if (typeof value === "string") {
+        process.env[key] = value
+      } else {
+        delete process.env[key]
+      }
+    }
   }
 }
 
@@ -215,20 +241,23 @@ export async function executeStep(
               }
             }
 
-            const pluginUrl = staticSonataBridgePluginUrl({
-              taskId: input.taskId,
-              stepId: input.stepId,
-              projectRoot: project.projectRootRealpath,
-              opsRoot: project.opsRootRealpath,
-            })
+            const pluginUrl = staticSonataBridgePluginUrl()
             const opencodeConfig: Config = { plugin: [pluginUrl] }
+            const opencodeEnv = {
+              SONATA_TASK_ID: input.taskId,
+              SONATA_STEP_ID: input.stepId,
+              SONATA_PROJECT_ROOT: project.projectRootRealpath,
+              SONATA_OPS_ROOT: project.opsRootRealpath,
+            }
 
             const port = await allocatePort()
-            const server = await createOpencodeServer({
-              hostname: "127.0.0.1",
-              port,
-              timeout: 15_000,
-              config: opencodeConfig,
+            const server = await withTemporaryEnv(opencodeEnv, async () => {
+              return createOpencodeServer({
+                hostname: "127.0.0.1",
+                port,
+                timeout: 15_000,
+                config: opencodeConfig,
+              })
             })
             const client = createOpencodeClient({
               baseUrl: server.url,
@@ -240,10 +269,23 @@ export async function executeStep(
             )
             const sessionId = created.data.id
 
+            const toolIdsResult = await client.tool.ids({}, { throwOnError: true })
+            const toolIds = toolIdsResult.data
+            if (!toolIds.includes(REQUIRED_SONATA_TOOL_ID)) {
+              throw new Error(
+                `OpenCode session missing required Sonata bridge tool ${REQUIRED_SONATA_TOOL_ID} for task=${input.taskId} step=${input.stepId}. Available tools: ${toolIds.join(", ")}`,
+              )
+            }
+
+            const kickoffPrompt = composeOpenCodeKickoffPrompt({
+              kickoffPrompt: params?.kickoffPrompt ?? workflowStep.opencode.kickoffPrompt,
+              artifacts: workflowStep.artifacts,
+            })
+
             await client.session.promptAsync(
               {
                 sessionID: sessionId,
-                parts: [{ type: "text", text: params?.kickoffPrompt ?? workflowStep.opencode.kickoffPrompt }],
+                parts: [{ type: "text", text: kickoffPrompt }],
               },
               { throwOnError: true },
             )

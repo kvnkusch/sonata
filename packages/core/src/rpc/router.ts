@@ -1,8 +1,13 @@
+import { rmSync } from "node:fs"
+import path from "node:path"
+import { eq } from "drizzle-orm"
 import { db } from "../db"
+import { projectTable } from "../db/project.sql"
+import { taskTable } from "../db/task.sql"
 import { getProjectById, linkOpsRepo } from "../project"
 import { resolveFromCwd } from "../scope"
 import { cancelStep, completeStep, failStep, getStepToolset, listStepsForTask, startStep, writeStepArtifact } from "../step"
-import { completeTask, listActiveTasks, startTask } from "../task"
+import { completeTask, deleteTask, listActiveTasks, startTask } from "../task"
 import {
   ErrorCode,
   ProjectLinkInput,
@@ -17,6 +22,7 @@ import {
   StepWriteArtifactInput,
   TaskListActiveInput,
   TaskCompleteInput,
+  TaskDeleteInput,
   TaskStartInput,
 } from "./base"
 
@@ -90,6 +96,48 @@ export const router = {
         throw invalidInput(parsed.error)
       }
       return completeTask(parsed.data)
+    },
+    delete(input: unknown) {
+      const parsed = TaskDeleteInput.safeParse(input)
+      if (!parsed.success) {
+        throw invalidInput(parsed.error)
+      }
+      const deleted = db().transaction((tx) => {
+        const task = tx
+          .select({ projectId: taskTable.projectId })
+          .from(taskTable)
+          .where(eq(taskTable.taskId, parsed.data.taskId))
+          .get()
+        if (!task) {
+          throw new RpcError(ErrorCode.TASK_NOT_FOUND, 404, `Task not found: ${parsed.data.taskId}`)
+        }
+
+        const project = tx
+          .select({ opsRootRealpath: projectTable.opsRootRealpath })
+          .from(projectTable)
+          .where(eq(projectTable.projectId, task.projectId))
+          .get()
+        if (!project) {
+          throw new RpcError(ErrorCode.PROJECT_NOT_FOUND, 404, `Project not found: ${task.projectId}`)
+        }
+
+        const result = deleteTask(parsed.data, tx)
+        return {
+          ...result,
+          opsRootRealpath: project.opsRootRealpath,
+        }
+      })
+
+      let cleanupWarning: string | undefined
+      try {
+        rmSync(path.join(deleted.opsRootRealpath, "tasks", parsed.data.taskId), { recursive: true, force: true })
+      } catch (error) {
+        cleanupWarning = error instanceof Error ? error.message : "Failed to clean up task artifact directory"
+      }
+
+      return cleanupWarning
+        ? { taskId: deleted.taskId, status: deleted.status, cleanupWarning }
+        : { taskId: deleted.taskId, status: deleted.status }
     },
   },
   step: {

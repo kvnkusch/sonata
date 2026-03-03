@@ -41,6 +41,7 @@ export type EffectRunnerDeps = {
 export function createEffectRunner(deps: EffectRunnerDeps) {
   return async function runEffect(effect: Effect, runtime: EffectRuntime): Promise<InteractiveEvent[]> {
     const { caller } = runtime
+    const backToTaskMenuValue = "__back_to_task_menu__"
 
     switch (effect.type) {
       case "ENSURE_LINKED_PROJECT": {
@@ -120,16 +121,27 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
 
       case "PROMPT_SELECT_STEP": {
         const loaded = await deps.loadWorkflowForTask(effect.taskId)
-        const defaultStepKey = effect.suggestedStepKey ?? loaded.workflow.steps[0]?.id
+        const steps = caller.step.list({ taskId: effect.taskId })
+        const workflowStepIds = loaded.workflow.steps.map((step) => step.id)
+        const activeStep = steps.find((step) => step.status === "active")
+        const completedStepKeys = new Set(steps.filter((step) => step.status === "completed").map((step) => step.stepKey))
+        const defaultStepKey =
+          activeStep?.stepKey ?? workflowStepIds.find((stepId) => !completedStepKeys.has(stepId)) ?? workflowStepIds[0]
         const selectedStepKey = await deps.prompts.select({
           message: "Select step",
-          options: loaded.workflow.steps.map((step) => ({
-            label: `${step.id}${step.id === defaultStepKey ? " (suggested)" : ""}`,
-            value: step.id,
-          })),
+          options: [
+            ...loaded.workflow.steps.map((step) => ({
+              label: `${step.id}${step.id === defaultStepKey ? " (suggested)" : ""}`,
+              value: step.id,
+            })),
+            { label: "Back to task menu", value: backToTaskMenuValue },
+          ],
           initialValue: defaultStepKey,
         })
         if (deps.prompts.isCancel(selectedStepKey)) {
+          return [{ type: "USER_BACK" }]
+        }
+        if (selectedStepKey === backToTaskMenuValue) {
           return [{ type: "USER_BACK" }]
         }
         return [{ type: "STEP_SELECTED", stepKey: selectedStepKey }]
@@ -267,6 +279,12 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
         }
       }
 
+      case "CHECK_STEP_ACTIVE": {
+        const steps = caller.step.list({ taskId: effect.taskId })
+        const current = steps.find((step) => step.stepId === effect.stepId)
+        return [{ type: "STEP_STILL_ACTIVE", active: current?.status === "active" }]
+      }
+
       case "CHECK_TASK_ACTIVE": {
         const active = caller.task.listActive({ projectId: effect.projectId })
         return [{ type: "TASK_STILL_ACTIVE", active: active.some((task) => task.taskId === effect.taskId) }]
@@ -277,6 +295,8 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
           message: "Task is still active",
           options: [
             { label: "Start another step", value: "next" },
+            { label: "Mark task complete", value: "complete" },
+            { label: "Delete task", value: "delete" },
             { label: "Status", value: "status" },
             { label: "Back to main menu", value: "back" },
           ],
@@ -285,10 +305,36 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
         if (deps.prompts.isCancel(action) || action === "back") {
           return [{ type: "USER_BACK" }]
         }
+        if (action === "complete") {
+          return [{ type: "TASK_CONTINUE_COMPLETE" }]
+        }
+        if (action === "delete") {
+          return [{ type: "TASK_CONTINUE_DELETE" }]
+        }
         if (action === "status") {
           return [{ type: "TASK_CONTINUE_STATUS" }]
         }
         return [{ type: "TASK_CONTINUE_START_NEXT_STEP" }]
+      }
+
+      case "COMPLETE_TASK": {
+        try {
+          caller.task.complete({ taskId: effect.taskId })
+          return [{ type: "TASK_COMPLETE_OK" }]
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Failed to complete task"
+          return [{ type: "TASK_ACTION_FAILED", message }]
+        }
+      }
+
+      case "DELETE_TASK": {
+        try {
+          caller.task.delete({ taskId: effect.taskId })
+          return [{ type: "TASK_DELETE_OK" }]
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Failed to delete task"
+          return [{ type: "TASK_ACTION_FAILED", message }]
+        }
       }
 
     case "PRINT_STATUS": {

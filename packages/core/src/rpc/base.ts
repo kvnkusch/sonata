@@ -56,6 +56,10 @@ export const TaskCompleteInput = z.object({
   completionPayload: z.unknown().optional(),
 })
 
+export const TaskDeleteInput = z.object({
+  taskId: z.string().min(1),
+})
+
 export const StepGetToolsetInput = z.object({
   taskId: z.string().min(1),
   stepId: z.string().min(1),

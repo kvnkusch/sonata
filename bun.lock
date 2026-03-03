@@ -36,6 +36,7 @@
       "dependencies": {
         "@opencode-ai/plugin": "catalog:",
         "@opencode-ai/sdk": "catalog:",
+        "@sonata/workflow": "workspace:*",
         "drizzle-orm": "catalog:",
         "ulid": "catalog:",
         "xdg-basedir": "catalog:",
@@ -47,6 +48,12 @@
         "@typescript/native-preview": "catalog:",
         "drizzle-kit": "catalog:",
         "typescript": "catalog:",
+      },
+    },
+    "packages/workflow": {
+      "name": "@sonata/workflow",
+      "dependencies": {
+        "zod": "^4.1.8",
       },
     },
   },
@@ -135,6 +142,8 @@
     "@sonata/cli": ["@sonata/cli@workspace:packages/cli"],
 
     "@sonata/core": ["@sonata/core@workspace:packages/core"],
+
+    "@sonata/workflow": ["@sonata/workflow@workspace:packages/workflow"],
 
     "@tsconfig/bun": ["@tsconfig/bun@1.0.9", "", {}, "sha512-4M0/Ivfwcpz325z6CwSifOBZYji3DFOEpY6zEUt0+Xi2qRhzwvmqQN9XAHJh3OVvRJuAqVTLU2abdCplvp6mwQ=="],
 

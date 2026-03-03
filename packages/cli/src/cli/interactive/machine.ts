@@ -17,12 +17,12 @@ export type InteractiveState =
   | { status: "bootstrapping" }
   | { status: "main_menu"; shared: SharedCtx }
   | { status: "selecting_task"; shared: SharedCtx; taskIds: string[] }
-  | { status: "selecting_step"; shared: SharedCtx; taskId: string; suggestedStepKey?: string }
+  | { status: "selecting_step"; shared: SharedCtx; taskId: string }
   | { status: "collecting_inputs"; shared: SharedCtx; taskId: string; stepKey: string }
   | { status: "starting_step"; shared: SharedCtx; taskId: string; stepKey: string; inputs?: InvocationInputs }
   | { status: "executing_step"; shared: SharedCtx; taskId: string; stepId: string }
   | { status: "step_actions"; shared: SharedCtx; taskId: string; stepId: string }
-  | { status: "task_continuation"; shared: SharedCtx; taskId: string; suggestedStepKey?: string }
+  | { status: "task_continuation"; shared: SharedCtx; taskId: string }
   | { status: "exiting"; shared?: SharedCtx }
   | { status: "fatal_error"; message: string; shared?: SharedCtx }
 
@@ -60,11 +60,17 @@ export type InteractiveEvent =
   | { type: "STEP_ACTION_FAIL" }
   | { type: "STEP_ACTION_CANCEL" }
   | { type: "STEP_ACTION_STATUS" }
+  | { type: "STEP_STILL_ACTIVE"; active: boolean }
   | { type: "STEP_FAIL_OK" }
   | { type: "STEP_CANCEL_OK" }
   | { type: "STEP_ACTION_FAILED"; message: string }
   | { type: "TASK_CONTINUE_START_NEXT_STEP" }
+  | { type: "TASK_CONTINUE_COMPLETE" }
+  | { type: "TASK_CONTINUE_DELETE" }
   | { type: "TASK_CONTINUE_STATUS" }
+  | { type: "TASK_COMPLETE_OK" }
+  | { type: "TASK_DELETE_OK" }
+  | { type: "TASK_ACTION_FAILED"; message: string }
   | { type: "TASK_STILL_ACTIVE"; active: boolean }
   | { type: "ERROR_ACK" }
 
@@ -76,7 +82,7 @@ export type Effect =
   | { type: "START_TASK"; projectId: string }
   | { type: "LIST_ACTIVE_TASKS"; projectId: string }
   | { type: "PROMPT_SELECT_TASK"; taskIds: string[] }
-  | { type: "PROMPT_SELECT_STEP"; taskId: string; suggestedStepKey?: string }
+  | { type: "PROMPT_SELECT_STEP"; taskId: string }
   | { type: "PROMPT_COLLECT_INPUTS"; taskId: string; stepKey: string }
   | { type: "START_STEP"; taskId: string; stepKey: string; inputs?: InvocationInputs }
   | { type: "EXECUTE_STEP"; taskId: string; stepId: string }
@@ -85,8 +91,11 @@ export type Effect =
   | { type: "PROMPT_STEP_ACTIONS" }
   | { type: "FAIL_STEP"; taskId: string; stepId: string }
   | { type: "CANCEL_STEP"; taskId: string; stepId: string }
+  | { type: "CHECK_STEP_ACTIVE"; taskId: string; stepId: string }
   | { type: "CHECK_TASK_ACTIVE"; projectId: string; taskId: string }
   | { type: "PROMPT_TASK_CONTINUATION"; taskId: string }
+  | { type: "COMPLETE_TASK"; taskId: string }
+  | { type: "DELETE_TASK"; taskId: string }
   | { type: "PRINT_ERROR"; message: string }
 
 export type TransitionResult = {
@@ -105,10 +114,10 @@ function withError(shared: SharedCtx, message: string): SharedCtx {
   }
 }
 
-function stepSelectionTarget(shared: SharedCtx, taskId: string, suggestedStepKey?: string): TransitionResult {
+function stepSelectionTarget(shared: SharedCtx, taskId: string): TransitionResult {
   return {
-    state: { status: "selecting_step", shared, taskId, suggestedStepKey },
-    effects: [{ type: "PROMPT_SELECT_STEP", taskId, suggestedStepKey }],
+    state: { status: "selecting_step", shared, taskId },
+    effects: [{ type: "PROMPT_SELECT_STEP", taskId }],
   }
 }
 
@@ -228,7 +237,14 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
           }
         case "USER_BACK":
         case "USER_CANCEL":
-          return { state: { status: "main_menu", shared: state.shared }, effects: [{ type: "PROMPT_MAIN_MENU" }] }
+          return {
+            state: {
+              status: "task_continuation",
+              shared: state.shared,
+              taskId: state.taskId,
+            },
+            effects: [{ type: "CHECK_TASK_ACTIVE", projectId: state.shared.projectId, taskId: state.taskId }],
+          }
         default:
           return { state, effects: [] }
       }
@@ -264,7 +280,6 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
               status: "task_continuation",
               shared: state.shared,
               taskId: state.taskId,
-              suggestedStepKey: undefined,
             },
             effects: [{ type: "CHECK_TASK_ACTIVE", projectId: state.shared.projectId, taskId: state.taskId }],
           }
@@ -293,7 +308,6 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
               status: "task_continuation",
               shared: withError(state.shared, event.message),
               taskId: state.taskId,
-              suggestedStepKey: undefined,
             },
             effects: [
               { type: "PRINT_ERROR", message: event.message },
@@ -337,7 +351,6 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
                 status: "task_continuation",
                 shared,
                 taskId: state.taskId,
-                suggestedStepKey: event.result.suggestedNextStepKey ?? undefined,
               },
               effects: [
                 ...attachEffect,
@@ -353,7 +366,6 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
                 status: "task_continuation",
                 shared,
                 taskId: state.taskId,
-                suggestedStepKey: undefined,
               },
               effects: [
                 ...attachEffect,
@@ -364,8 +376,13 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
           }
 
           return {
-            state: { status: "step_actions", shared, taskId: state.taskId, stepId: state.stepId },
-            effects: [...attachEffect, { type: "PRINT_STEP_RESULT" }, { type: "PROMPT_STEP_ACTIONS" }],
+            state: {
+              status: "step_actions",
+              shared,
+              taskId: state.taskId,
+              stepId: state.stepId,
+            },
+            effects: [...attachEffect, { type: "PRINT_STEP_RESULT" }, { type: "CHECK_STEP_ACTIVE", taskId: state.taskId, stepId: state.stepId }],
           }
         }
         case "STEP_EXECUTE_FAILED":
@@ -385,6 +402,21 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
 
     case "step_actions": {
       switch (event.type) {
+        case "STEP_STILL_ACTIVE":
+          if (event.active) {
+            return { state, effects: [{ type: "PROMPT_STEP_ACTIONS" }] }
+          }
+          return {
+            state: {
+              status: "task_continuation",
+              shared: {
+                ...state.shared,
+                activeStepId: null,
+              },
+              taskId: state.taskId,
+            },
+            effects: [{ type: "CHECK_TASK_ACTIVE", projectId: state.shared.projectId, taskId: state.taskId }],
+          }
         case "STEP_ACTION_RETRY":
           return {
             state: { status: "executing_step", shared: state.shared, taskId: state.taskId, stepId: state.stepId },
@@ -407,12 +439,18 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
             activeStepId: null,
           }
           return {
-            state: { status: "task_continuation", shared, taskId: state.taskId, suggestedStepKey: undefined },
+            state: { status: "task_continuation", shared, taskId: state.taskId },
             effects: [{ type: "CHECK_TASK_ACTIVE", projectId: shared.projectId, taskId: state.taskId }],
           }
         }
         case "STEP_ACTION_STATUS":
-          return { state, effects: [{ type: "PRINT_STATUS" }, { type: "PROMPT_STEP_ACTIONS" }] }
+          return {
+            state,
+            effects: [
+              { type: "PRINT_STATUS" },
+              { type: "CHECK_STEP_ACTIVE", taskId: state.taskId, stepId: state.stepId },
+            ],
+          }
         case "USER_BACK":
         case "USER_CANCEL":
           return {
@@ -420,7 +458,6 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
               status: "task_continuation",
               shared: state.shared,
               taskId: state.taskId,
-              suggestedStepKey: undefined,
             },
             effects: [{ type: "CHECK_TASK_ACTIVE", projectId: state.shared.projectId, taskId: state.taskId }],
           }
@@ -442,9 +479,36 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
           }
           return { state, effects: [{ type: "PROMPT_TASK_CONTINUATION", taskId: state.taskId }] }
         case "TASK_CONTINUE_START_NEXT_STEP":
-          return stepSelectionTarget(state.shared, state.taskId, state.suggestedStepKey)
+          return stepSelectionTarget(state.shared, state.taskId)
+        case "TASK_CONTINUE_COMPLETE":
+          return {
+            state,
+            effects: [{ type: "COMPLETE_TASK", taskId: state.taskId }],
+          }
+        case "TASK_CONTINUE_DELETE":
+          return {
+            state,
+            effects: [{ type: "DELETE_TASK", taskId: state.taskId }],
+          }
+        case "TASK_COMPLETE_OK":
+        case "TASK_DELETE_OK": {
+          const shared = {
+            ...state.shared,
+            activeTaskId: null,
+            activeStepId: null,
+          }
+          return {
+            state: { ...state, shared },
+            effects: [{ type: "CHECK_TASK_ACTIVE", projectId: shared.projectId, taskId: state.taskId }],
+          }
+        }
         case "TASK_CONTINUE_STATUS":
           return { state, effects: [{ type: "PRINT_STATUS" }, { type: "PROMPT_TASK_CONTINUATION", taskId: state.taskId }] }
+        case "TASK_ACTION_FAILED":
+          return {
+            state: { ...state, shared: withError(state.shared, event.message) },
+            effects: [{ type: "PRINT_ERROR", message: event.message }, { type: "PROMPT_TASK_CONTINUATION", taskId: state.taskId }],
+          }
         case "USER_BACK":
         case "USER_CANCEL":
           return { state: { status: "main_menu", shared: state.shared }, effects: [{ type: "PROMPT_MAIN_MENU" }] }
