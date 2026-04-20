@@ -13,8 +13,8 @@ function writeArtifactToolName(artifact: WorkflowStepArtifact): string {
 }
 
 export function composeOpenCodeKickoffPrompt(input: {
-  kickoffPrompt: string
-  artifacts?: WorkflowStepArtifact[]
+  prompt: string
+  artifacts?: readonly WorkflowStepArtifact[]
 }): string {
   const artifacts = input.artifacts ?? []
   const requiredArtifacts = artifacts.filter((artifact) => Boolean(artifact.required))
@@ -35,5 +35,5 @@ export function composeOpenCodeKickoffPrompt(input: {
       : "No artifact write tools are declared for this step.",
   ].join("\n")
 
-  return `${contract}\n\nStep instructions:\n${input.kickoffPrompt}`
+  return `${contract}\n\nStep instructions:\n${input.prompt}`
 }

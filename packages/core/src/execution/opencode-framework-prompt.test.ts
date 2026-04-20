@@ -4,7 +4,7 @@ import { composeOpenCodeKickoffPrompt } from "./opencode-framework-prompt"
 describe("composeOpenCodeKickoffPrompt", () => {
   it("prepends framework completion contract and tool names", () => {
     const text = composeOpenCodeKickoffPrompt({
-      kickoffPrompt: "Write artifacts and complete.",
+      prompt: "Write artifacts and complete.",
       artifacts: [
         { name: "topic", kind: "markdown", required: true },
         { name: "design-decisions", kind: "markdown" },

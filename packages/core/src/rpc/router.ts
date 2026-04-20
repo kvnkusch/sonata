@@ -6,7 +6,17 @@ import { projectTable } from "../db/project.sql"
 import { taskTable } from "../db/task.sql"
 import { getProjectById, linkOpsRepo } from "../project"
 import { resolveFromCwd } from "../scope"
-import { cancelStep, completeStep, failStep, getStepToolset, listStepsForTask, startStep, writeStepArtifact } from "../step"
+import {
+  cancelStep,
+  completeStep,
+  failStep,
+  getStepToolset,
+  invokeStepTool,
+  listStepInputArtifactCandidates,
+  listStepsForTask,
+  startStep,
+  writeStepArtifact,
+} from "../step"
 import { completeTask, deleteTask, listActiveTasks, startTask } from "../task"
 import {
   ErrorCode,
@@ -17,6 +27,8 @@ import {
   StepCompleteInput,
   StepFailInput,
   StepGetToolsetInput,
+  StepInvokeToolInput,
+  StepListInputArtifactsInput,
   StepListInput,
   StepStartInput,
   StepWriteArtifactInput,
@@ -155,6 +167,13 @@ export const router = {
       }
       return listStepsForTask(parsed.data)
     },
+    async listInputArtifacts(input: unknown) {
+      const parsed = StepListInputArtifactsInput.safeParse(input)
+      if (!parsed.success) {
+        throw invalidInput(parsed.error)
+      }
+      return listStepInputArtifactCandidates(parsed.data)
+    },
     async getToolset(input: unknown) {
       const parsed = StepGetToolsetInput.safeParse(input)
       if (!parsed.success) {
@@ -168,6 +187,13 @@ export const router = {
         throw invalidInput(parsed.error)
       }
       return writeStepArtifact(parsed.data)
+    },
+    async invokeTool(input: unknown) {
+      const parsed = StepInvokeToolInput.safeParse(input)
+      if (!parsed.success) {
+        throw invalidInput(parsed.error)
+      }
+      return invokeStepTool(parsed.data)
     },
     async complete(input: unknown) {
       const parsed = StepCompleteInput.safeParse(input)

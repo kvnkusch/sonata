@@ -8,6 +8,7 @@
   },
   "scripts": {
     "test": "bun test",
+    "test:types": "vitest run src/index.type.test.ts --typecheck",
     "typecheck": "tsgo --noEmit",
     "lint": "bunx --yes oxlint --deny-warnings --tsconfig ../../tsconfig.json .",
     "lint:fix": "bunx --yes oxlint --fix --tsconfig ../../tsconfig.json .",
@@ -16,5 +17,8 @@
   },
   "dependencies": {
     "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.18"
   }
 }

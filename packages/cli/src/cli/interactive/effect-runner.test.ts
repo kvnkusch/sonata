@@ -288,6 +288,118 @@ describe("interactive effect runner", () => {
     expect(deleteResult).toEqual([{ type: "TASK_CONTINUE_DELETE" }])
   })
 
+  it("labels first continuation option with suggested next step", async () => {
+    let observedFirstLabel: string | undefined
+    const runEffect = createEffectRunner({
+      prompts: {
+        async select<Value>(opts: any): Promise<Value> {
+          observedFirstLabel = opts.options[0]?.label
+          return "next" as Value
+        },
+        isCancel(value: unknown) {
+          return value === CANCEL
+        },
+        outro() {},
+      },
+      ui: { println() {}, error() {} },
+      async ensureLinkedProject() {
+        return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
+      },
+      async loadWorkflowForTask() {
+        return { workflow: { steps: [{ id: "intake" }, { id: "research" }] } } as never
+      },
+      async collectStepInputs() {
+        return {}
+      },
+      async executeStep() {
+        return { status: "completed", suggestedNextStepKey: null }
+      },
+      async attachOpencodeTui() {},
+    })
+
+    const runtime = makeRuntime()
+    runtime.lastStepResult = {
+      status: "completed",
+      suggestedNextStepKey: "research",
+    }
+    await runEffect({ type: "PROMPT_TASK_CONTINUATION", taskId: "tsk_1" }, runtime)
+
+    expect(observedFirstLabel).toBe("Start next step (research)")
+  })
+
+  it("emits continuation event with suggested step key", async () => {
+    const runEffect = createEffectRunner({
+      prompts: makePrompts("next"),
+      ui: { println() {}, error() {} },
+      async ensureLinkedProject() {
+        return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
+      },
+      async loadWorkflowForTask() {
+        return { workflow: { steps: [{ id: "intake" }, { id: "research" }] } } as never
+      },
+      async collectStepInputs() {
+        return {}
+      },
+      async executeStep() {
+        return { status: "completed", suggestedNextStepKey: null }
+      },
+      async attachOpencodeTui() {},
+    })
+
+    const runtime = makeRuntime()
+    runtime.lastStepResult = {
+      status: "completed",
+      suggestedNextStepKey: "research",
+    }
+    const result = await runEffect({ type: "PROMPT_TASK_CONTINUATION", taskId: "tsk_1" }, runtime)
+
+    expect(result).toEqual([{ type: "TASK_CONTINUE_START_NEXT_STEP", stepKey: "research" }])
+  })
+
+  it("falls back to generic continuation label when suggested step is already completed", async () => {
+    let observedFirstLabel: string | undefined
+    const caller = makeCallerStub({
+      step: {
+        list: () => [{ stepId: "stp_1", stepKey: "research", status: "completed" }],
+      },
+    })
+    const runEffect = createEffectRunner({
+      prompts: {
+        async select<Value>(opts: any): Promise<Value> {
+          observedFirstLabel = opts.options[0]?.label
+          return "next" as Value
+        },
+        isCancel(value: unknown) {
+          return value === CANCEL
+        },
+        outro() {},
+      },
+      ui: { println() {}, error() {} },
+      async ensureLinkedProject() {
+        return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
+      },
+      async loadWorkflowForTask() {
+        return { workflow: { steps: [{ id: "intake" }, { id: "research" }] } } as never
+      },
+      async collectStepInputs() {
+        return {}
+      },
+      async executeStep() {
+        return { status: "completed", suggestedNextStepKey: null }
+      },
+      async attachOpencodeTui() {},
+    })
+
+    const runtime = makeRuntime(caller)
+    runtime.lastStepResult = {
+      status: "completed",
+      suggestedNextStepKey: "research",
+    }
+    await runEffect({ type: "PROMPT_TASK_CONTINUATION", taskId: "tsk_1" }, runtime)
+
+    expect(observedFirstLabel).toBe("Start another step")
+  })
+
   it("runs task complete and delete effects", async () => {
     const caller = makeCallerStub()
     const runEffect = createEffectRunner({
@@ -534,5 +646,52 @@ describe("interactive effect runner", () => {
     expect(lines).toContain("step_status: failed")
     expect(lines).toContain("failure_reason: validation failed")
     expect(lines).toContain('failure_details: {"code":"E_VALIDATION"}')
+  })
+
+  it("prints refreshed completed status when blocked step finishes externally", async () => {
+    const lines: string[] = []
+    const caller = makeCallerStub({
+      step: {
+        list: () => [{ stepId: "stp_1", status: "completed" }],
+      },
+    })
+    const runEffect = createEffectRunner({
+      prompts: makePrompts("unused"),
+      ui: {
+        println(...args: string[]) {
+          lines.push(args.join(" "))
+        },
+        error() {},
+      },
+      async ensureLinkedProject() {
+        return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
+      },
+      async loadWorkflowForTask() {
+        return { workflow: { steps: [] } } as never
+      },
+      async collectStepInputs() {
+        return {}
+      },
+      async executeStep() {
+        return { status: "completed", suggestedNextStepKey: null }
+      },
+      async attachOpencodeTui() {},
+    })
+
+    const runtime = makeRuntime(caller)
+    runtime.sharedCtx = {
+      ...(runtime.sharedCtx as NonNullable<typeof runtime.sharedCtx>),
+      activeTaskId: "tsk_1",
+      activeStepId: "stp_1",
+    }
+    runtime.lastStepResult = {
+      status: "blocked",
+      suggestedNextStepKey: "research",
+    }
+
+    await runEffect({ type: "PRINT_STEP_RESULT" }, runtime)
+
+    expect(lines).toContain("step_status: completed")
+    expect(lines).toContain("suggested_next_step: research")
   })
 })

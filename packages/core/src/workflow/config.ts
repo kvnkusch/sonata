@@ -1,3 +1,4 @@
+import { access, readFile } from "node:fs/promises"
 import path from "node:path"
 import z from "zod"
 
@@ -24,12 +25,13 @@ export async function readOpsConfig(opsRootRealpath: string): Promise<{
   config: OpsConfig
 }> {
   const configPath = path.resolve(opsRootRealpath, "config.json")
-  const file = Bun.file(configPath)
-  if (!(await file.exists())) {
+  try {
+    await access(configPath)
+  } catch {
     throw new Error(`Missing Sonata ops repo config: ${configPath}`)
   }
 
-  const raw = await file.json()
+  const raw = JSON.parse(await readFile(configPath, "utf8")) as unknown
   return {
     configPath,
     config: OpsConfigSchema.parse(raw),

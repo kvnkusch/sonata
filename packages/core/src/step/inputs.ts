@@ -10,7 +10,7 @@ export type ArtifactSelectionOverride = {
   indices?: number[]
 }
 
-type ArtifactCandidate = {
+export type ArtifactCandidate = {
   artifactName: string
   artifactKind: "markdown" | "json"
   relativePath: string
@@ -18,6 +18,36 @@ type ArtifactCandidate = {
   stepKey: string
   stepIndex: number
   writtenAt: number
+}
+
+export function listArtifactCandidatesForBinding(input: {
+  taskId: string
+  fromStepKey: string
+  artifactName: string
+  executor: DbExecutor
+}): ArtifactCandidate[] {
+  return input.executor
+    .select({
+      artifactName: artifactTable.artifactName,
+      artifactKind: artifactTable.artifactKind,
+      relativePath: artifactTable.relativePath,
+      stepId: stepTable.stepId,
+      stepKey: stepTable.stepKey,
+      stepIndex: stepTable.stepIndex,
+      writtenAt: artifactTable.writtenAt,
+    })
+    .from(artifactTable)
+    .innerJoin(stepTable, eq(stepTable.stepId, artifactTable.stepId))
+    .where(
+      and(
+        eq(artifactTable.taskId, input.taskId),
+        eq(stepTable.taskId, input.taskId),
+        eq(stepTable.stepKey, input.fromStepKey),
+        eq(artifactTable.artifactName, input.artifactName),
+      ),
+    )
+    .orderBy(asc(stepTable.stepIndex), asc(artifactTable.writtenAt))
+    .all() as ArtifactCandidate[]
 }
 
 function validateIndices(indices: number[] | undefined): number[] {
@@ -63,9 +93,9 @@ function selectCandidates(
   }
 }
 
-function parseInvocation(input: unknown): JsonValue {
+function parseInvocation(input: unknown): JsonValue | undefined {
   if (input === undefined) {
-    return null
+    return undefined
   }
   try {
     return JSON.parse(JSON.stringify(input)) as JsonValue
@@ -83,7 +113,6 @@ export async function resolveStepInputs(input: {
 }): Promise<StepInputsSnapshot> {
   const artifactBindings = input.stepInputs?.artifacts ?? []
   const resolved: StepInputsSnapshot = {
-    invocation: null,
     artifacts: {},
   }
 
@@ -95,28 +124,12 @@ export async function resolveStepInputs(input: {
   }
 
   for (const binding of artifactBindings) {
-    const rows = input.executor
-      .select({
-        artifactName: artifactTable.artifactName,
-        artifactKind: artifactTable.artifactKind,
-        relativePath: artifactTable.relativePath,
-        stepId: stepTable.stepId,
-        stepKey: stepTable.stepKey,
-        stepIndex: stepTable.stepIndex,
-        writtenAt: artifactTable.writtenAt,
-      })
-      .from(artifactTable)
-      .innerJoin(stepTable, eq(stepTable.stepId, artifactTable.stepId))
-      .where(
-        and(
-          eq(artifactTable.taskId, input.taskId),
-          eq(stepTable.taskId, input.taskId),
-          eq(stepTable.stepKey, binding.from.step),
-          eq(artifactTable.artifactName, binding.from.artifact),
-        ),
-      )
-      .orderBy(asc(stepTable.stepIndex), asc(artifactTable.writtenAt))
-      .all() as ArtifactCandidate[]
+    const rows = listArtifactCandidatesForBinding({
+      taskId: input.taskId,
+      fromStepKey: binding.from.step,
+      artifactName: binding.from.artifact,
+      executor: input.executor,
+    })
 
     const selection = input.artifactSelections?.[binding.as] ?? {
       mode: binding.cardinality.mode === "single" ? "latest" : "all",

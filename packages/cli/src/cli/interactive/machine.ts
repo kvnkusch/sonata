@@ -64,7 +64,7 @@ export type InteractiveEvent =
   | { type: "STEP_FAIL_OK" }
   | { type: "STEP_CANCEL_OK" }
   | { type: "STEP_ACTION_FAILED"; message: string }
-  | { type: "TASK_CONTINUE_START_NEXT_STEP" }
+  | { type: "TASK_CONTINUE_START_NEXT_STEP"; stepKey?: string }
   | { type: "TASK_CONTINUE_COMPLETE" }
   | { type: "TASK_CONTINUE_DELETE" }
   | { type: "TASK_CONTINUE_STATUS" }
@@ -479,6 +479,17 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
           }
           return { state, effects: [{ type: "PROMPT_TASK_CONTINUATION", taskId: state.taskId }] }
         case "TASK_CONTINUE_START_NEXT_STEP":
+          if (event.stepKey) {
+            return {
+              state: {
+                status: "collecting_inputs",
+                shared: state.shared,
+                taskId: state.taskId,
+                stepKey: event.stepKey,
+              },
+              effects: [{ type: "PROMPT_COLLECT_INPUTS", taskId: state.taskId, stepKey: event.stepKey }],
+            }
+          }
           return stepSelectionTarget(state.shared, state.taskId)
         case "TASK_CONTINUE_COMPLETE":
           return {

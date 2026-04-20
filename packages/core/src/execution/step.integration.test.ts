@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { eq } from "drizzle-orm"
+import { z } from "zod"
 import { closeDb, db, stepTable } from "../db"
 import { executeStep } from "../execution"
 import { linkOpsRepo } from "../project"
@@ -14,6 +15,7 @@ const tempDirs: string[] = []
 afterEach(() => {
   closeDb()
   delete process.env.SONATA_DB_PATH
+  delete (globalThis as { __sonata_test_zod?: typeof z }).__sonata_test_zod
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -88,8 +90,8 @@ describe("execution.step integration", () => {
         if (ctx.inputs.invocation?.strictness !== "high") {
           throw new Error("missing invocation snapshot")
         }
-        if (!ctx.inputs.artifacts.topic?.refs[0]?.relativePath.includes("001-intake-topic.md")) {
-          throw new Error("missing artifact snapshot")
+        if (ctx.inputs.artifacts.topic?.trim() !== "topic v1") {
+          throw new Error("missing artifact value")
         }
         await ctx.completeStep({ ok: true })
       },
@@ -128,6 +130,83 @@ describe("execution.step integration", () => {
       artifactSelections: {
         topic: { mode: "indices", indices: [1] },
       },
+    })
+
+    const result = await executeStep({ taskId: task.taskId, stepId: plan.stepId })
+    expect(result.status).toBe("completed")
+  })
+
+  it("loads json artifact inputs into ctx.inputs as parsed values", async () => {
+    const { linked } = setupSandbox(
+      "json-input-values",
+      `export default {
+  apiVersion: 1,
+  id: "default",
+  version: "0.1.0",
+  name: "Default",
+  steps: [
+    {
+      id: "intake",
+      title: "Intake",
+      artifacts: [
+        {
+          name: "config",
+          kind: "json",
+          required: true,
+          once: true,
+          schema: {
+            parse(input) {
+              if (!input || typeof input !== "object") {
+                throw new Error("invalid config")
+              }
+              return input
+            },
+          },
+        },
+      ],
+      async run() {},
+      async on() {},
+    },
+    {
+      id: "plan",
+      title: "Plan",
+      inputs: {
+        artifacts: [
+          {
+            as: "config",
+            from: { step: "intake", artifact: "config" },
+            cardinality: { mode: "single", required: true },
+          },
+        ],
+      },
+      async run(ctx) {
+        const config = ctx.inputs.artifacts.config
+        if (!config || typeof config !== "object" || config.mode !== "fast") {
+          throw new Error("missing parsed json artifact value")
+        }
+        await ctx.completeStep({ ok: true })
+      },
+      async on() {},
+    },
+  ],
+}
+`,
+    )
+
+    const task = await startTask({ projectId: linked.projectId })
+    const intake = await startStep({ taskId: task.taskId, stepKey: "intake" })
+    await writeStepArtifact({
+      taskId: task.taskId,
+      stepId: intake.stepId,
+      artifactName: "config",
+      artifactKind: "json",
+      payload: { data: { mode: "fast", retries: 3 } },
+    })
+    await completeStep({ taskId: task.taskId, stepId: intake.stepId })
+
+    const plan = await startStep({
+      taskId: task.taskId,
+      stepKey: "plan",
     })
 
     const result = await executeStep({ taskId: task.taskId, stepId: plan.stepId })
@@ -332,5 +411,48 @@ export default {
     await expect(executeStep({ taskId: task.taskId, stepId: step.stepId })).rejects.toThrow(
       `Invalid frozen step inputs JSON for task=${task.taskId} step=${step.stepId}`,
     )
+  })
+
+  it("injects resolved custom OpenCode tool names into ctx.opencode.tools", async () => {
+    ;(globalThis as { __sonata_test_zod?: typeof z }).__sonata_test_zod = z
+    const { linked } = setupSandbox(
+      "opencode-tool-mapping",
+      `const z = globalThis.__sonata_test_zod
+
+export default {
+  apiVersion: 1,
+  id: "default",
+  version: "0.1.0",
+  name: "Default",
+  steps: [
+    {
+      id: "plan",
+      title: "Plan",
+      opencode: {
+        tools: {
+          "repo_lookup": {
+            description: "Lookup repo",
+            argsSchema: { query: z.string().min(1) },
+            async execute() { return { ok: true } },
+          },
+        },
+      },
+      async run(ctx) {
+        if (ctx.opencode.tools.repo_lookup.name !== "sonata_step_plan__repo_lookup") {
+          throw new Error("missing resolved OpenCode tool mapping")
+        }
+        await ctx.completeStep()
+      },
+      async on() {},
+    },
+  ],
+}
+`,
+    )
+
+    const task = await startTask({ projectId: linked.projectId })
+    const step = await startStep({ taskId: task.taskId, stepKey: "plan" })
+    const result = await executeStep({ taskId: task.taskId, stepId: step.stepId })
+    expect(result.status).toBe("completed")
   })
 })

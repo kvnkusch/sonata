@@ -9,14 +9,14 @@ export function normalizeArtifactDeclaration(artifact: WorkflowStepArtifact) {
 }
 
 export function getDeclaredArtifact(
-  artifacts: WorkflowStepArtifact[] | undefined,
+  artifacts: readonly WorkflowStepArtifact[] | undefined,
   artifactName: string,
 ): WorkflowStepArtifact | undefined {
   return (artifacts ?? []).find((artifact) => artifact.name === artifactName)
 }
 
 export function missingRequiredArtifacts(input: {
-  artifacts: WorkflowStepArtifact[] | undefined
+  artifacts: readonly WorkflowStepArtifact[] | undefined
   writtenArtifactNames: Set<string>
 }): string[] {
   return (input.artifacts ?? [])

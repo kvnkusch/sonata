@@ -1,8 +1,9 @@
 import { mkdirSync } from "node:fs"
 import path from "node:path"
-import { Database as BunDatabase } from "bun:sqlite"
-import { drizzle, type BunSQLiteDatabase } from "drizzle-orm/bun-sqlite"
-import { migrate } from "drizzle-orm/bun-sqlite/migrator"
+import type BetterSqlite3 from "better-sqlite3"
+import type { Database as BunDatabase } from "bun:sqlite"
+import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3"
+import type { BunSQLiteDatabase } from "drizzle-orm/bun-sqlite"
 import { paths } from "../paths"
 import * as schema from "./schema"
 
@@ -12,12 +13,22 @@ export { stepTable } from "./step.sql"
 export { taskTable } from "./task.sql"
 export { taskEventTable } from "./task-event.sql"
 
-type SonataDb = BunSQLiteDatabase<typeof schema>
+const isBunRuntime = typeof Bun !== "undefined"
+
+const sqliteModule = isBunRuntime ? await import("bun:sqlite") : await import("better-sqlite3")
+const bunDrizzleModule = isBunRuntime ? await import("drizzle-orm/bun-sqlite") : undefined
+const betterSqliteDrizzleModule = isBunRuntime ? undefined : await import("drizzle-orm/better-sqlite3")
+const migratorModule = isBunRuntime
+  ? await import("drizzle-orm/bun-sqlite/migrator")
+  : await import("drizzle-orm/better-sqlite3/migrator")
+
+type SonataDb = BunSQLiteDatabase<typeof schema> | BetterSQLite3Database<typeof schema>
 export type DbExecutor = SonataDb
 export type DbTx = Parameters<Parameters<DbExecutor["transaction"]>[0]>[0]
+type SqliteConnection = BunDatabase | BetterSqlite3.Database
 
 const state: {
-  sqlite?: BunDatabase
+  sqlite?: SqliteConnection
   db?: SonataDb
 } = {}
 
@@ -33,15 +44,22 @@ export function db(): SonataDb {
   const location = databasePath()
   mkdirSync(path.dirname(location), { recursive: true })
 
-  const sqlite = new BunDatabase(location, { create: true })
+  const sqlite = isBunRuntime
+    ? new sqliteModule.Database(location, { create: true })
+    : new sqliteModule.default(location)
   sqlite.run("PRAGMA journal_mode = WAL")
   sqlite.run("PRAGMA synchronous = NORMAL")
   sqlite.run("PRAGMA busy_timeout = 5000")
   sqlite.run("PRAGMA foreign_keys = ON")
 
-  const client = drizzle({ client: sqlite, schema })
+  const client = isBunRuntime
+    ? (bunDrizzleModule!.drizzle({ client: sqlite as BunDatabase, schema }) as SonataDb)
+    : (betterSqliteDrizzleModule!.drizzle({
+        client: sqlite as BetterSqlite3.Database,
+        schema,
+      }) as SonataDb)
   const migrationsFolder = path.join(import.meta.dir, "../../migrations")
-  migrate(client, { migrationsFolder })
+  migratorModule.migrate(client as never, { migrationsFolder })
 
   state.sqlite = sqlite
   state.db = client
@@ -50,7 +68,11 @@ export function db(): SonataDb {
 
 export function closeDb() {
   if (state.sqlite) {
-    state.sqlite.close(false)
+    if (isBunRuntime) {
+      ;(state.sqlite as BunDatabase).close(false)
+    } else {
+      ;(state.sqlite as BetterSqlite3.Database).close()
+    }
   }
   state.sqlite = undefined
   state.db = undefined

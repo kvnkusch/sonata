@@ -1,4 +1,6 @@
 import { createServer } from "node:net"
+import { readFile } from "node:fs/promises"
+import path from "node:path"
 import { createOpencodeClient, createOpencodeServer, type Config } from "@opencode-ai/sdk/v2"
 import { eq } from "drizzle-orm"
 import { db, projectTable, stepTable, taskTable, type DbExecutor } from "../db"
@@ -6,13 +8,18 @@ import { composeOpenCodeKickoffPrompt } from "./opencode-framework-prompt"
 import { staticSonataBridgePluginUrl } from "../opencode"
 import { ErrorCode, RpcError } from "../rpc/base"
 import { completeStep, failStep, parseStepInputsSnapshot, setStepSession, writeArtifactFromExecutionContext } from "../step"
+import { resolveCustomToolNameMap } from "../step/get-toolset"
 import { completeTask } from "../task"
 import { loadWorkflowForTask } from "../workflow"
 import type {
   StepContextBase,
   StepContextWithOpenCode,
+  StepInputs,
+  StepInputsSnapshot,
   StepRunResult,
+  WorkflowStep,
   WorkflowStepWithOpenCode,
+  JsonValue,
 } from "../workflow/module"
 
 export type ExecuteStepInput = {
@@ -33,6 +40,20 @@ export type ExecuteStepResult = {
     reused: boolean
     close?: () => void
   }
+}
+
+export type CompleteStepInRuntimeInput = {
+  taskId: string
+  stepId: string
+  completionPayload?: unknown
+  sessionId?: string
+  messageId?: string
+  manual?: boolean
+}
+
+export type CompleteStepInRuntimeResult = {
+  status: "completed"
+  suggestedNextStepKey: string | null
 }
 
 type ActiveOpenCodeSession = {
@@ -64,6 +85,76 @@ function isStepRunResult(value: unknown): value is StepRunResult {
   }
   const status = (value as { status?: unknown }).status
   return status === "completed" || status === "failed"
+}
+
+function isParserSchema(value: unknown): value is { parse: (input: unknown) => unknown } {
+  return typeof value === "object" && value !== null && "parse" in value && typeof value.parse === "function"
+}
+
+function toJsonValue(value: unknown, errorContext: string): JsonValue {
+  try {
+    return JSON.parse(JSON.stringify(value)) as JsonValue
+  } catch {
+    throw new Error(`${errorContext} must be JSON-serializable`)
+  }
+}
+
+async function hydrateStepInputs(input: {
+  taskId: string
+  stepId: string
+  opsRoot: string
+  workflowSteps: readonly WorkflowStep[]
+  snapshot: StepInputsSnapshot
+}): Promise<StepInputs> {
+  const stepById = new Map(input.workflowSteps.map((step) => [step.id, step] as const))
+  const hydratedArtifacts: StepInputs["artifacts"] = {}
+  const opsRootWithSep = input.opsRoot.endsWith(path.sep) ? input.opsRoot : `${input.opsRoot}${path.sep}`
+
+  for (const [bindingName, binding] of Object.entries(input.snapshot.artifacts)) {
+    const values = await Promise.all(
+      binding.refs.map(async (ref) => {
+        const artifactPath = path.resolve(input.opsRoot, ref.relativePath)
+        if (artifactPath !== input.opsRoot && !artifactPath.startsWith(opsRootWithSep)) {
+          throw new Error(
+            `Invalid artifact path outside ops root for task=${input.taskId} step=${input.stepId}: ${ref.relativePath}`,
+          )
+        }
+
+        const sourceStep = stepById.get(ref.stepKey)
+        const sourceArtifact = sourceStep?.artifacts?.find((artifact) => artifact.name === ref.artifactName)
+        if (sourceArtifact && sourceArtifact.kind !== ref.artifactKind) {
+          throw new Error(
+            `Artifact kind mismatch for input ${bindingName}: expected ${sourceArtifact.kind}, got ${ref.artifactKind}`,
+          )
+        }
+
+        const raw = await readFile(artifactPath, "utf8")
+        if (ref.artifactKind === "markdown") {
+          return raw
+        }
+
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(raw)
+        } catch {
+          throw new Error(`Invalid JSON artifact for input ${bindingName}: ${ref.relativePath}`)
+        }
+
+        if (sourceArtifact?.kind === "json" && isParserSchema(sourceArtifact.schema)) {
+          parsed = sourceArtifact.schema.parse(parsed)
+        }
+
+        return toJsonValue(parsed, `Artifact ${ref.artifactName}`)
+      }),
+    )
+
+    hydratedArtifacts[bindingName] = binding.mode === "single" ? values[0] : values
+  }
+
+  return {
+    ...(typeof input.snapshot.invocation === "undefined" ? {} : { invocation: input.snapshot.invocation }),
+    artifacts: hydratedArtifacts,
+  }
 }
 
 function failureReasonFromStep(step: { completionPayloadJson: string | null }): string | undefined {
@@ -166,10 +257,18 @@ export async function executeStep(
     throw new Error(`Workflow step not found in ${loaded.workflow.id}: ${step.stepKey}`)
   }
 
-  const inputs = parseStepInputsSnapshot({
+  const snapshot = parseStepInputsSnapshot({
     taskId: input.taskId,
     stepId: input.stepId,
     value: step.inputs,
+  })
+
+  const inputs = await hydrateStepInputs({
+    taskId: input.taskId,
+    stepId: input.stepId,
+    opsRoot: project.opsRootRealpath,
+    workflowSteps: loaded.workflow.steps,
+    snapshot,
   })
 
   const baseCtx: StepContextBase = {
@@ -213,12 +312,16 @@ export async function executeStep(
   }
 
   let activeSession: ActiveOpenCodeSession | undefined
+  const resolvedOpenCodeTools = isOpenCodeStep(workflowStep)
+    ? resolveCustomToolNameMap({ stepKey: step.stepKey, tools: workflowStep.opencode.tools })
+    : undefined
 
   const ctx = isOpenCodeStep(workflowStep)
     ? ({
         ...baseCtx,
         opencode: {
-          start: async (params?: { title?: string; kickoffPrompt?: string }) => {
+          tools: resolvedOpenCodeTools ?? {},
+          start: async (params: { title?: string; prompt: string }) => {
             const current = executor.select().from(stepTable).where(eq(stepTable.stepId, input.stepId)).get()
             if (current?.sessionId && current.opencodeBaseUrl) {
               const reusable = await canReuseExistingSession({
@@ -232,11 +335,11 @@ export async function executeStep(
                   sessionId: current.sessionId,
                   reused: true,
                 }
-                await workflowStep.on(ctxRef!, {
+                await (workflowStep as WorkflowStepWithOpenCode).on(ctxRef! as never, {
                   type: "opencode.started",
                   sessionId: current.sessionId,
                   reused: true,
-                })
+                } as never)
                 return
               }
             }
@@ -264,7 +367,7 @@ export async function executeStep(
               directory: project.projectRootRealpath,
             })
             const created = await client.session.create(
-              { title: params?.title ?? `Sonata ${workflowStep.title}` },
+              { title: params.title ?? `Sonata ${workflowStep.title}` },
               { throwOnError: true },
             )
             const sessionId = created.data.id
@@ -277,15 +380,15 @@ export async function executeStep(
               )
             }
 
-            const kickoffPrompt = composeOpenCodeKickoffPrompt({
-              kickoffPrompt: params?.kickoffPrompt ?? workflowStep.opencode.kickoffPrompt,
+            const prompt = composeOpenCodeKickoffPrompt({
+              prompt: params.prompt,
               artifacts: workflowStep.artifacts,
             })
 
             await client.session.promptAsync(
               {
                 sessionID: sessionId,
-                parts: [{ type: "text", text: kickoffPrompt }],
+                parts: [{ type: "text", text: prompt }],
               },
               { throwOnError: true },
             )
@@ -306,11 +409,11 @@ export async function executeStep(
               reused: false,
               close: server.close,
             }
-            await workflowStep.on(ctxRef!, {
+            await (workflowStep as WorkflowStepWithOpenCode).on(ctxRef! as never, {
               type: "opencode.started",
               sessionId,
               reused: false,
-            })
+            } as never)
           },
         },
       } satisfies StepContextWithOpenCode)
@@ -409,5 +512,129 @@ export async function executeStep(
     status: "blocked",
     suggestedNextStepKey: workflowStep.next ?? null,
     opencode: activeSession,
+  }
+}
+
+export async function completeStepInRuntime(
+  input: CompleteStepInRuntimeInput,
+  executor: DbExecutor = db(),
+): Promise<CompleteStepInRuntimeResult> {
+  const task = executor.select().from(taskTable).where(eq(taskTable.taskId, input.taskId)).get()
+  if (!task) {
+    throw new Error(`Task not found: ${input.taskId}`)
+  }
+  const step = executor.select().from(stepTable).where(eq(stepTable.stepId, input.stepId)).get()
+  if (!step || step.taskId !== input.taskId) {
+    throw new Error(`Step not found: ${input.stepId}`)
+  }
+  const project = executor.select().from(projectTable).where(eq(projectTable.projectId, task.projectId)).get()
+  if (!project) {
+    throw new Error(`Project not found: ${task.projectId}`)
+  }
+
+  const loaded = await loadWorkflowForTask(input.taskId, executor)
+  const workflowStep = loaded.workflow.steps.find((candidate) => candidate.id === step.stepKey)
+  if (!workflowStep) {
+    throw new Error(`Workflow step not found in ${loaded.workflow.id}: ${step.stepKey}`)
+  }
+
+  const snapshot = parseStepInputsSnapshot({
+    taskId: input.taskId,
+    stepId: input.stepId,
+    value: step.inputs,
+  })
+
+  const hydratedInputs = await hydrateStepInputs({
+    taskId: input.taskId,
+    stepId: input.stepId,
+    opsRoot: project.opsRootRealpath,
+    workflowSteps: loaded.workflow.steps,
+    snapshot,
+  })
+
+  const baseCtx: StepContextBase = {
+    repoRoot: project.projectRootRealpath,
+    taskId: input.taskId,
+    stepId: input.stepId,
+    inputs: hydratedInputs,
+    writeMarkdownArtifact: async (params) => {
+      const written = await writeArtifactFromExecutionContext({
+        taskId: input.taskId,
+        stepId: input.stepId,
+        slug: params.slug,
+        kind: "markdown",
+        payload: { markdown: params.markdown },
+      })
+      return { kind: "markdown", path: written.relativePath }
+    },
+    writeJsonArtifact: async (params) => {
+      const written = await writeArtifactFromExecutionContext({
+        taskId: input.taskId,
+        stepId: input.stepId,
+        slug: params.slug,
+        kind: "json",
+        payload: { data: params.data },
+      })
+      return { kind: "json", path: written.relativePath }
+    },
+    completeStep: async (payload?: unknown) => {
+      return completeStep({
+        taskId: input.taskId,
+        stepId: input.stepId,
+        completionPayload: payload,
+      })
+    },
+    completeTask: async (payload?: unknown) => {
+      return completeTask({
+        taskId: input.taskId,
+        completionPayload: payload,
+      })
+    },
+  }
+
+  const resolvedOpenCodeTools = isOpenCodeStep(workflowStep)
+    ? resolveCustomToolNameMap({ stepKey: step.stepKey, tools: workflowStep.opencode.tools })
+    : undefined
+
+  const ctx = isOpenCodeStep(workflowStep)
+    ? ({
+        ...baseCtx,
+        opencode: {
+          tools: resolvedOpenCodeTools ?? {},
+          start: async () => {
+            return
+          },
+        },
+      } satisfies StepContextWithOpenCode)
+    : baseCtx
+
+  const completion = await completeStep(
+    {
+      taskId: input.taskId,
+      stepId: input.stepId,
+      completionPayload: input.completionPayload,
+      sessionId: input.sessionId,
+    },
+    executor,
+  )
+
+  const completionSessionId = input.sessionId ?? step.sessionId ?? undefined
+  if (isOpenCodeStep(workflowStep) && completionSessionId) {
+    await workflowStep.on(
+      ctx as never,
+      {
+        type: "opencode.complete",
+        manual: input.manual ?? false,
+        sessionId: completionSessionId,
+        ...(input.messageId ? { messageId: input.messageId } : {}),
+      } as never,
+    )
+  }
+
+  await workflowStep.on(ctx as never, { type: "step.completed" } as never)
+
+  return {
+    status: "completed",
+    suggestedNextStepKey: completion.suggestedNextStepKey,
   }
 }

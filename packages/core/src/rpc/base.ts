@@ -85,12 +85,25 @@ export const StepListInput = z.object({
   taskId: z.string().min(1),
 })
 
+export const StepListInputArtifactsInput = z.object({
+  taskId: z.string().min(1),
+  stepKey: z.string().min(1),
+})
+
 export const StepWriteArtifactInput = z.object({
   taskId: z.string().min(1),
   stepId: z.string().min(1),
   artifactName: z.string().min(1),
   artifactKind: z.enum(["markdown", "json"]),
   payload: z.union([z.object({ markdown: z.string().min(1) }), z.object({ data: z.unknown() })]),
+  sessionId: z.string().min(1).optional(),
+})
+
+export const StepInvokeToolInput = z.object({
+  taskId: z.string().min(1),
+  stepId: z.string().min(1),
+  toolId: z.string().min(1),
+  args: z.unknown(),
   sessionId: z.string().min(1).optional(),
 })
 

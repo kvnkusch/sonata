@@ -104,6 +104,19 @@ describe("rpc error contract", () => {
       message: expect.stringContaining("missing required artifacts"),
     })
 
+    await expect(
+      caller.step.invokeTool({
+        taskId: started.taskId,
+        stepId: initial.stepId,
+        toolId: "missing",
+        args: {},
+      }),
+    ).rejects.toMatchObject({
+      code: ErrorCode.INVALID_INPUT,
+      status: 400,
+      message: expect.stringContaining("Custom OpenCode tool is not declared"),
+    })
+
     await caller.step.writeArtifact({
       taskId: started.taskId,
       stepId: initial.stepId,

@@ -155,7 +155,7 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
         }
 
         try {
-          const inputs = await deps.collectStepInputs(step)
+          const inputs = await deps.collectStepInputs(step, { taskId: effect.taskId, caller })
           if (typeof inputs.invocation === "undefined" && typeof inputs.artifactSelections === "undefined") {
             return [{ type: "INPUTS_SKIPPED" }]
           }
@@ -227,6 +227,27 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
 
       case "PRINT_STEP_RESULT": {
         if (runtime.lastStepResult) {
+          if (
+            runtime.lastStepResult.status === "blocked" &&
+            runtime.sharedCtx?.activeTaskId &&
+            runtime.sharedCtx.activeStepId
+          ) {
+            const steps = caller.step.list({ taskId: runtime.sharedCtx.activeTaskId })
+            const current = steps.find((step) => step.stepId === runtime.sharedCtx?.activeStepId)
+            if (current?.status === "completed") {
+              runtime.lastStepResult = {
+                ...runtime.lastStepResult,
+                status: "completed",
+              }
+            } else if (current?.status === "failed") {
+              runtime.lastStepResult = {
+                status: "failed",
+                suggestedNextStepKey: null,
+                ...(runtime.lastStepResult.failure ? { failure: runtime.lastStepResult.failure } : {}),
+              }
+            }
+          }
+
           deps.ui.println("step_status:", runtime.lastStepResult.status)
           deps.ui.println("suggested_next_step:", runtime.lastStepResult.suggestedNextStepKey ?? "none")
           if (runtime.lastStepResult.failure) {
@@ -291,10 +312,28 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
       }
 
       case "PROMPT_TASK_CONTINUATION": {
+        let nextLabel = "Start another step"
+        let nextStepKeyToStart: string | undefined
+        const suggestedStepKey = runtime.lastStepResult?.suggestedNextStepKey
+        if (suggestedStepKey) {
+          const loaded = await deps.loadWorkflowForTask(effect.taskId)
+          const workflowStepIds = new Set(loaded.workflow.steps.map((step) => step.id))
+          if (workflowStepIds.has(suggestedStepKey)) {
+            const steps = caller.step.list({ taskId: effect.taskId })
+            const hasCompletedSuggested = steps.some(
+              (step) => step.stepKey === suggestedStepKey && step.status === "completed",
+            )
+            if (!hasCompletedSuggested) {
+              nextLabel = `Start next step (${suggestedStepKey})`
+              nextStepKeyToStart = suggestedStepKey
+            }
+          }
+        }
+
         const action = await deps.prompts.select({
           message: "Task is still active",
           options: [
-            { label: "Start another step", value: "next" },
+            { label: nextLabel, value: "next" },
             { label: "Mark task complete", value: "complete" },
             { label: "Delete task", value: "delete" },
             { label: "Status", value: "status" },
@@ -314,7 +353,7 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
         if (action === "status") {
           return [{ type: "TASK_CONTINUE_STATUS" }]
         }
-        return [{ type: "TASK_CONTINUE_START_NEXT_STEP" }]
+        return [{ type: "TASK_CONTINUE_START_NEXT_STEP", ...(nextStepKeyToStart ? { stepKey: nextStepKeyToStart } : {}) }]
       }
 
       case "COMPLETE_TASK": {

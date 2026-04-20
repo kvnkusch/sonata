@@ -22,6 +22,7 @@
     "@opencode-ai/plugin": "catalog:",
     "@opencode-ai/sdk": "catalog:",
     "@sonata/workflow": "workspace:*",
+    "better-sqlite3": "^11.10.0",
     "drizzle-orm": "catalog:",
     "ulid": "catalog:",
     "xdg-basedir": "catalog:",
@@ -29,6 +30,7 @@
   },
   "devDependencies": {
     "@tsconfig/bun": "catalog:",
+    "@types/better-sqlite3": "^7.6.12",
     "@types/bun": "catalog:",
     "@typescript/native-preview": "catalog:",
     "drizzle-kit": "catalog:",

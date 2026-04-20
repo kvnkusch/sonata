@@ -2,7 +2,7 @@ import z from "zod"
 import type { StepInputsSnapshot } from "../workflow/module"
 
 const snapshotSchema = z.object({
-  invocation: z.unknown().nullable().optional(),
+  invocation: z.unknown().optional(),
   artifacts: z
     .record(
       z.string(),
@@ -39,7 +39,9 @@ export function parseStepInputsSnapshot(input: { taskId: string; stepId: string;
   }
 
   return {
-    invocation: (validated.data.invocation ?? null) as StepInputsSnapshot["invocation"],
+    ...(typeof validated.data.invocation === "undefined"
+      ? {}
+      : { invocation: validated.data.invocation as StepInputsSnapshot["invocation"] }),
     artifacts: validated.data.artifacts ?? {},
   }
 }

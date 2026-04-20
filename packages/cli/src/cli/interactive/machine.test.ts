@@ -86,6 +86,19 @@ describe("interactive machine transitions", () => {
     expect(next.effects).toEqual([{ type: "PROMPT_SELECT_STEP", taskId: "tsk_1" }])
   })
 
+  it("task continuation with suggested step starts that step flow directly", () => {
+    const main = linkedMainMenuState()
+    const continuation: InteractiveState = {
+      status: "task_continuation",
+      taskId: "tsk_1",
+      shared: main.status === "main_menu" ? main.shared : ({} as never),
+    }
+
+    const next = transition(continuation, { type: "TASK_CONTINUE_START_NEXT_STEP", stepKey: "research" })
+    expect(next.state.status).toBe("collecting_inputs")
+    expect(next.effects).toEqual([{ type: "PROMPT_COLLECT_INPUTS", taskId: "tsk_1", stepKey: "research" }])
+  })
+
   it("task continuation can request task completion", () => {
     const main = linkedMainMenuState()
     const continuation: InteractiveState = {

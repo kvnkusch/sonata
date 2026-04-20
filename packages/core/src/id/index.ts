@@ -1,7 +1,7 @@
-import { ulid } from "ulid"
+import { randomBytes } from "node:crypto"
 
 function withPrefix(prefix: string): string {
-  return `${prefix}_${ulid().toLowerCase()}`
+  return `${prefix}_${randomBytes(10).toString("hex")}`
 }
 
 export const newProjectId = () => withPrefix("prj")
