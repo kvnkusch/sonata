@@ -1,7 +1,11 @@
+import { readFile } from "node:fs/promises"
 import * as prompts from "@clack/prompts"
 import z from "zod"
 
 const zAny = z as any
+type PromptApi = Pick<typeof prompts, "text" | "select" | "isCancel"> & {
+  log: Pick<typeof prompts.log, "error">
+}
 
 function unwrapSchema(schema: any): any {
   let current = schema
@@ -52,12 +56,12 @@ export function parseIndicesSelection(raw: string): number[] {
   return [...new Set(parsed)].sort((a, b) => a - b)
 }
 
-async function promptField(name: string, schema: any): Promise<unknown> {
+async function promptField(name: string, schema: any, promptApi: PromptApi = prompts): Promise<unknown> {
   const optional = schema.safeParse(undefined).success
   const unwrapped = unwrapSchema(schema)
 
   if (unwrapped instanceof zAny.ZodBoolean) {
-    const value = await prompts.select({
+    const value = await promptApi.select({
       message: `${name}${optional ? " (optional)" : ""}`,
       options: [
         { label: "true", value: true },
@@ -65,7 +69,7 @@ async function promptField(name: string, schema: any): Promise<unknown> {
         ...(optional ? [{ label: "skip", value: undefined }] : []),
       ],
     })
-    if (prompts.isCancel(value)) {
+    if (promptApi.isCancel(value)) {
       throw new Error("Cancelled")
     }
     return value
@@ -73,7 +77,7 @@ async function promptField(name: string, schema: any): Promise<unknown> {
 
   if (unwrapped instanceof zAny.ZodEnum) {
     while (true) {
-      const value = await prompts.select({
+      const value = await promptApi.select({
         message: `${name}${optional ? " (optional)" : ""}`,
         options: [
           ...unwrapped.options.map((option: string) => ({ label: option, value: option })),
@@ -81,34 +85,106 @@ async function promptField(name: string, schema: any): Promise<unknown> {
           ...(optional ? [{ label: "skip", value: undefined }] : []),
         ],
       })
-      if (prompts.isCancel(value)) {
+      if (promptApi.isCancel(value)) {
         throw new Error("Cancelled")
       }
       if (value !== "__custom__") {
         return value
       }
 
-      const raw = await prompts.text({
+      const raw = await promptApi.text({
         message: `${name} custom value`,
         placeholder: String(unwrapped.options[0] ?? "value"),
       })
-      if (prompts.isCancel(raw)) {
+      if (promptApi.isCancel(raw)) {
         throw new Error("Cancelled")
       }
       const parsed = schema.safeParse(raw.trim())
       if (parsed.success) {
         return parsed.data
       }
-      prompts.log.error(parsed.error.issues[0]?.message ?? `Invalid value for ${name}`)
+      promptApi.log.error(parsed.error.issues[0]?.message ?? `Invalid value for ${name}`)
+    }
+  }
+
+  if (unwrapped instanceof zAny.ZodString) {
+    while (true) {
+      const mode = await promptApi.select({
+        message: `${name}${optional ? " (optional)" : ""}`,
+        options: [
+          { label: "Enter text", value: "text" },
+          { label: "Load from file", value: "file" },
+          ...(optional ? [{ label: "skip", value: "skip" }] : []),
+        ],
+        initialValue: "text",
+      })
+      if (promptApi.isCancel(mode)) {
+        throw new Error("Cancelled")
+      }
+      if (mode === "skip") {
+        return undefined
+      }
+
+      if (mode === "file") {
+        const rawPath = await promptApi.text({
+          message: `${name} file path`,
+          placeholder: "./request.md",
+        })
+        if (promptApi.isCancel(rawPath)) {
+          throw new Error("Cancelled")
+        }
+
+        const filePath = rawPath.trim()
+        if (!filePath) {
+          promptApi.log.error("File path is required")
+          continue
+        }
+
+        try {
+          const candidate = await readFile(filePath, "utf8")
+          const parsed = schema.safeParse(candidate)
+          if (parsed.success) {
+            return parsed.data
+          }
+          promptApi.log.error(parsed.error.issues[0]?.message ?? `Invalid value for ${name}`)
+          continue
+        } catch (error) {
+          promptApi.log.error(error instanceof Error ? error.message : `Failed to read ${filePath}`)
+          continue
+        }
+      }
+
+      const raw = await promptApi.text({
+        message: `${name}${optional ? " (optional)" : ""}`,
+        placeholder: "value",
+      })
+      if (promptApi.isCancel(raw)) {
+        throw new Error("Cancelled")
+      }
+
+      const text = raw.trim()
+      if (!text && optional) {
+        return undefined
+      }
+      if (!text) {
+        promptApi.log.error(`${name} is required`)
+        continue
+      }
+
+      const parsed = schema.safeParse(raw)
+      if (parsed.success) {
+        return parsed.data
+      }
+      promptApi.log.error(parsed.error.issues[0]?.message ?? `Invalid value for ${name}`)
     }
   }
 
   while (true) {
-      const raw = await prompts.text({
+    const raw = await promptApi.text({
       message: `${name}${optional ? " (optional)" : ""}`,
       placeholder: unwrapped instanceof zAny.ZodNumber ? "42" : "value",
     })
-    if (prompts.isCancel(raw)) {
+    if (promptApi.isCancel(raw)) {
       throw new Error("Cancelled")
     }
 
@@ -126,14 +202,14 @@ async function promptField(name: string, schema: any): Promise<unknown> {
     if (parsed.success) {
       return parsed.data
     }
-    prompts.log.error(parsed.error.issues[0]?.message ?? `Invalid value for ${name}`)
+    promptApi.log.error(parsed.error.issues[0]?.message ?? `Invalid value for ${name}`)
   }
 }
 
-export async function promptZodObjectInput(schema: any): Promise<unknown> {
+export async function promptZodObjectInput(schema: any, promptApi: PromptApi = prompts): Promise<unknown> {
   const result: Record<string, unknown> = {}
   for (const [name, fieldSchema] of Object.entries(schema.shape as Record<string, unknown>)) {
-    const value = await promptField(name, fieldSchema)
+    const value = await promptField(name, fieldSchema, promptApi)
     if (typeof value !== "undefined") {
       result[name] = value
     }

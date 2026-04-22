@@ -48,6 +48,17 @@ function makePrompts(selectValue: unknown) {
   }
 }
 
+async function readOpsConfig() {
+  return {
+    config: {
+      version: 1 as const,
+      defaultWorkflowId: "default",
+      workflowModules: [{ id: "default", path: "./workflows/default.ts" }],
+    },
+    configPath: "/tmp/ops/config.json",
+  }
+}
+
 function makeRuntime(caller = makeCallerStub()): EffectRuntime {
   return {
     caller,
@@ -81,6 +92,7 @@ describe("interactive effect runner", () => {
       async ensureLinkedProject() {
         return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
       },
+      readOpsConfig,
       async loadWorkflowForTask() {
         return { workflow: { steps: [] } } as never
       },
@@ -96,6 +108,85 @@ describe("interactive effect runner", () => {
     const result = await runEffect({ type: "PROMPT_MAIN_MENU" }, makeRuntime())
     expect(result).toEqual([{ type: "MAIN_START_TASK" }])
     expect(eventsSeen).toHaveLength(0)
+  })
+
+  it("selects a workflow before starting a task", async () => {
+    const runEffect = createEffectRunner({
+      prompts: makePrompts("secondary"),
+      ui: { println() {}, error() {} },
+      async ensureLinkedProject() {
+        return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
+      },
+      async readOpsConfig() {
+        return {
+          config: {
+            version: 1 as const,
+            defaultWorkflowId: "default",
+            workflowModules: [
+              { id: "default", path: "./workflows/default.ts" },
+              { id: "secondary", path: "./workflows/secondary.ts" },
+            ],
+          },
+          configPath: "/tmp/ops/config.json",
+        }
+      },
+      async loadWorkflowForTask() {
+        return { workflow: { steps: [] } } as never
+      },
+      async collectStepInputs() {
+        return {}
+      },
+      async executeStep() {
+        return { status: "completed", suggestedNextStepKey: null }
+      },
+      async attachOpencodeTui() {},
+    })
+
+    const result = await runEffect({ type: "PROMPT_SELECT_WORKFLOW", opsRoot: "/tmp/ops" }, makeRuntime())
+    expect(result).toEqual([{ type: "WORKFLOW_SELECTED", workflowName: "secondary" }])
+  })
+
+  it("passes the selected workflow when starting a task", async () => {
+    const calls: unknown[] = []
+    const caller = makeCallerStub({
+      task: {
+        start: async (input: unknown) => {
+          calls.push(input)
+          return {
+            taskId: "tsk_default",
+            projectId: "prj_test",
+            workflowName: "secondary",
+            status: "active" as const,
+          }
+        },
+      },
+    })
+    const runEffect = createEffectRunner({
+      prompts: makePrompts("unused"),
+      ui: { println() {}, error() {} },
+      async ensureLinkedProject() {
+        return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
+      },
+      readOpsConfig,
+      async loadWorkflowForTask() {
+        return { workflow: { steps: [] } } as never
+      },
+      async collectStepInputs() {
+        return {}
+      },
+      async executeStep() {
+        return { status: "completed", suggestedNextStepKey: null }
+      },
+      async attachOpencodeTui() {},
+    })
+
+    const result = await runEffect(
+      { type: "START_TASK", projectId: "prj_test", workflowName: "secondary" },
+      makeRuntime(caller),
+    )
+
+    expect(result).toEqual([{ type: "TASK_START_OK", taskId: "tsk_default" }])
+    expect(calls).toEqual([{ projectId: "prj_test", workflowRef: { name: "secondary" } }])
   })
 
   it("returns USER_BACK and prints when no active tasks", async () => {
@@ -124,6 +215,7 @@ describe("interactive effect runner", () => {
       async ensureLinkedProject() {
         return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
       },
+      readOpsConfig,
       async loadWorkflowForTask() {
         return { workflow: { steps: [] } } as never
       },
@@ -173,6 +265,7 @@ describe("interactive effect runner", () => {
       async ensureLinkedProject() {
         return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
       },
+      readOpsConfig,
       async loadWorkflowForTask() {
         return { workflow: { steps: [] } } as never
       },
@@ -201,6 +294,7 @@ describe("interactive effect runner", () => {
       async ensureLinkedProject() {
         return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
       },
+      readOpsConfig,
       async loadWorkflowForTask() {
         return { workflow: { steps: [] } } as never
       },
@@ -251,6 +345,7 @@ describe("interactive effect runner", () => {
       async ensureLinkedProject() {
         return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
       },
+      readOpsConfig,
       async loadWorkflowForTask() {
         return { workflow: { steps: [] } } as never
       },
@@ -272,6 +367,7 @@ describe("interactive effect runner", () => {
       async ensureLinkedProject() {
         return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
       },
+      readOpsConfig,
       async loadWorkflowForTask() {
         return { workflow: { steps: [] } } as never
       },
@@ -305,6 +401,7 @@ describe("interactive effect runner", () => {
       async ensureLinkedProject() {
         return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
       },
+      readOpsConfig,
       async loadWorkflowForTask() {
         return { workflow: { steps: [{ id: "intake" }, { id: "research" }] } } as never
       },
@@ -334,6 +431,7 @@ describe("interactive effect runner", () => {
       async ensureLinkedProject() {
         return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
       },
+      readOpsConfig,
       async loadWorkflowForTask() {
         return { workflow: { steps: [{ id: "intake" }, { id: "research" }] } } as never
       },
@@ -378,6 +476,7 @@ describe("interactive effect runner", () => {
       async ensureLinkedProject() {
         return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
       },
+      readOpsConfig,
       async loadWorkflowForTask() {
         return { workflow: { steps: [{ id: "intake" }, { id: "research" }] } } as never
       },
@@ -408,6 +507,7 @@ describe("interactive effect runner", () => {
       async ensureLinkedProject() {
         return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
       },
+      readOpsConfig,
       async loadWorkflowForTask() {
         return { workflow: { steps: [] } } as never
       },
@@ -436,6 +536,7 @@ describe("interactive effect runner", () => {
       async ensureLinkedProject() {
         return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
       },
+      readOpsConfig,
       async loadWorkflowForTask() {
         return { workflow: { steps: [{ id: "intake" }] } } as never
       },
@@ -483,6 +584,7 @@ describe("interactive effect runner", () => {
       async ensureLinkedProject() {
         return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
       },
+      readOpsConfig,
       async loadWorkflowForTask() {
         return { workflow: { steps: [{ id: "intake" }, { id: "research" }] } } as never
       },
@@ -518,6 +620,7 @@ describe("interactive effect runner", () => {
       async ensureLinkedProject() {
         return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
       },
+      readOpsConfig,
       async loadWorkflowForTask() {
         return { workflow: { steps: [] } } as never
       },
@@ -585,6 +688,7 @@ describe("interactive effect runner", () => {
       async ensureLinkedProject() {
         return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
       },
+      readOpsConfig,
       async loadWorkflowForTask() {
         return { workflow: { steps: [] } } as never
       },
@@ -623,6 +727,7 @@ describe("interactive effect runner", () => {
       async ensureLinkedProject() {
         return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
       },
+      readOpsConfig,
       async loadWorkflowForTask() {
         return { workflow: { steps: [] } } as never
       },
@@ -666,6 +771,7 @@ describe("interactive effect runner", () => {
       async ensureLinkedProject() {
         return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
       },
+      readOpsConfig,
       async loadWorkflowForTask() {
         return { workflow: { steps: [] } } as never
       },

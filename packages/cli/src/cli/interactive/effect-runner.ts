@@ -1,7 +1,7 @@
 import * as prompts from "@clack/prompts"
 import { executeStep } from "@sonata/core/execution"
 import { createCaller } from "@sonata/core/rpc"
-import { loadWorkflowForTask } from "@sonata/core/workflow"
+import { loadWorkflowForTask, readOpsConfig } from "@sonata/core/workflow"
 import { attachOpencodeTui } from "../opencode/attach"
 import { UI } from "../ui"
 import { collectStepInputs } from "./collect-step-inputs"
@@ -30,6 +30,7 @@ export type EffectRunnerDeps = {
   prompts: Pick<typeof prompts, "select" | "isCancel" | "outro">
   ui: Pick<typeof UI, "println" | "error">
   ensureLinkedProject: (caller: ReturnType<typeof createCaller>) => Promise<LinkedProject>
+  readOpsConfig: typeof readOpsConfig
   loadWorkflowForTask: typeof loadWorkflowForTask
   collectStepInputs: typeof collectStepInputs
   executeStep: typeof executeStep
@@ -82,12 +83,36 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
 
       case "START_TASK": {
         try {
-          const started = await caller.task.start({ projectId: effect.projectId })
+          const started = await caller.task.start({
+            projectId: effect.projectId,
+            workflowRef: { name: effect.workflowName },
+          })
           return [{ type: "TASK_START_OK", taskId: started.taskId }]
         } catch (error) {
           const message = error instanceof Error ? error.message : "Failed to start task"
           return [{ type: "TASK_START_FAILED", message }]
         }
+      }
+
+      case "PROMPT_SELECT_WORKFLOW": {
+        const { config } = await deps.readOpsConfig(effect.opsRoot)
+        if (config.workflowModules.length === 1) {
+          return [{ type: "WORKFLOW_SELECTED", workflowName: config.workflowModules[0]!.id }]
+        }
+
+        const workflowName = await deps.prompts.select({
+          message: "Select workflow",
+          options: config.workflowModules.map((workflow) => ({
+            label:
+              workflow.id === config.defaultWorkflowId ? `${workflow.id} (default)` : workflow.id,
+            value: workflow.id,
+          })),
+          initialValue: config.defaultWorkflowId,
+        })
+        if (deps.prompts.isCancel(workflowName)) {
+          return [{ type: "USER_BACK" }]
+        }
+        return [{ type: "WORKFLOW_SELECTED", workflowName }]
       }
 
       case "LIST_ACTIVE_TASKS": {

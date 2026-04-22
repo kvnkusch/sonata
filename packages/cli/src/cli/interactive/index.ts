@@ -2,7 +2,7 @@ import * as prompts from "@clack/prompts"
 import { executeStep } from "@sonata/core/execution"
 import { getProjectByRoot } from "@sonata/core/project"
 import { createCaller } from "@sonata/core/rpc"
-import { loadWorkflowForTask } from "@sonata/core/workflow"
+import { loadWorkflowForTask, readOpsConfig } from "@sonata/core/workflow"
 import { attachOpencodeTui } from "../opencode/attach"
 import { UI } from "../ui"
 import { collectStepInputs } from "./collect-step-inputs"
@@ -73,6 +73,7 @@ export async function runInteractive() {
     prompts,
     ui: UI,
     ensureLinkedProject,
+    readOpsConfig,
     loadWorkflowForTask,
     collectStepInputs,
     executeStep,

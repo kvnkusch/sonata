@@ -16,6 +16,7 @@ export type InvocationInputs = {
 export type InteractiveState =
   | { status: "bootstrapping" }
   | { status: "main_menu"; shared: SharedCtx }
+  | { status: "selecting_workflow"; shared: SharedCtx }
   | { status: "selecting_task"; shared: SharedCtx; taskIds: string[] }
   | { status: "selecting_step"; shared: SharedCtx; taskId: string }
   | { status: "collecting_inputs"; shared: SharedCtx; taskId: string; stepKey: string }
@@ -36,6 +37,7 @@ export type InteractiveEvent =
   | { type: "MAIN_EXIT" }
   | { type: "USER_BACK" }
   | { type: "USER_CANCEL" }
+  | { type: "WORKFLOW_SELECTED"; workflowName: string }
   | { type: "TASKS_LOADED"; taskIds: string[] }
   | { type: "TASK_SELECTED"; taskId: string; currentStepId?: string }
   | { type: "TASK_START_OK"; taskId: string }
@@ -77,9 +79,10 @@ export type InteractiveEvent =
 export type Effect =
   | { type: "ENSURE_LINKED_PROJECT" }
   | { type: "PROMPT_MAIN_MENU" }
+  | { type: "PROMPT_SELECT_WORKFLOW"; opsRoot: string }
   | { type: "PRINT_STATUS" }
   | { type: "OUTRO" }
-  | { type: "START_TASK"; projectId: string }
+  | { type: "START_TASK"; projectId: string; workflowName: string }
   | { type: "LIST_ACTIVE_TASKS"; projectId: string }
   | { type: "PROMPT_SELECT_TASK"; taskIds: string[] }
   | { type: "PROMPT_SELECT_STEP"; taskId: string }
@@ -153,8 +156,8 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
       switch (event.type) {
         case "MAIN_START_TASK":
           return {
-            state,
-            effects: [{ type: "START_TASK", projectId: state.shared.projectId }],
+            state: { status: "selecting_workflow", shared: state.shared },
+            effects: [{ type: "PROMPT_SELECT_WORKFLOW", opsRoot: state.shared.opsRoot }],
           }
         case "TASK_START_OK":
           return stepSelectionTarget(
@@ -188,6 +191,21 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
         case "MAIN_EXIT":
         case "USER_CANCEL":
           return { state: { status: "exiting", shared: state.shared }, effects: [{ type: "OUTRO" }] }
+        default:
+          return { state, effects: [] }
+      }
+    }
+
+    case "selecting_workflow": {
+      switch (event.type) {
+        case "WORKFLOW_SELECTED":
+          return {
+            state: { status: "main_menu", shared: state.shared },
+            effects: [{ type: "START_TASK", projectId: state.shared.projectId, workflowName: event.workflowName }],
+          }
+        case "USER_BACK":
+        case "USER_CANCEL":
+          return { state: { status: "main_menu", shared: state.shared }, effects: [{ type: "PROMPT_MAIN_MENU" }] }
         default:
           return { state, effects: [] }
       }

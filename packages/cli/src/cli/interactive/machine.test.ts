@@ -31,9 +31,18 @@ describe("interactive machine transitions", () => {
   it("start task flow reaches step selection", () => {
     const main = linkedMainMenuState()
     const startRequested = transition(main, { type: "MAIN_START_TASK" })
-    expect(startRequested.effects).toEqual([{ type: "START_TASK", projectId: "prj_test" }])
+    expect(startRequested.state.status).toBe("selecting_workflow")
+    expect(startRequested.effects).toEqual([{ type: "PROMPT_SELECT_WORKFLOW", opsRoot: "/tmp/ops" }])
 
-    const started = transition(main, { type: "TASK_START_OK", taskId: "tsk_123" })
+    const workflowSelected = transition(startRequested.state, {
+      type: "WORKFLOW_SELECTED",
+      workflowName: "default",
+    })
+    expect(workflowSelected.effects).toEqual([
+      { type: "START_TASK", projectId: "prj_test", workflowName: "default" },
+    ])
+
+    const started = transition(workflowSelected.state, { type: "TASK_START_OK", taskId: "tsk_123" })
     expect(started.state.status).toBe("selecting_step")
     if (started.state.status === "selecting_step") {
       expect(started.state.taskId).toBe("tsk_123")
