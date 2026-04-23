@@ -1,14 +1,31 @@
-import { and, eq } from "drizzle-orm"
+import { and, eq, inArray } from "drizzle-orm"
 import { db, stepTable, taskTable, type DbExecutor } from "../db"
 import { TaskEventType, writeTaskEvent } from "../event/task-event"
 import { ErrorCode, RpcError } from "../rpc/base"
-import { assertStepTransition } from "./transitions"
+import { assertStepTransition, openStepStatuses } from "./transitions"
+import { wakeWaitingParentIfReady } from "./waiting"
 
 export type FailStepInput = {
   taskId: string
   stepId: string
   reason?: string
   sessionId?: string
+}
+
+function affectedRowCount(result: unknown): number | null {
+  if (typeof result !== "object" || result === null) {
+    return null
+  }
+
+  if ("changes" in result && typeof result.changes === "number") {
+    return result.changes
+  }
+
+  if ("rowsAffected" in result && typeof result.rowsAffected === "number") {
+    return result.rowsAffected
+  }
+
+  return null
 }
 
 export function failStep(input: FailStepInput, executor: DbExecutor = db()) {
@@ -23,17 +40,50 @@ export function failStep(input: FailStepInput, executor: DbExecutor = db()) {
 
   assertStepTransition(step.status, "failed", `Cannot fail task=${input.taskId} step=${input.stepId} from current state`)
 
+  if (step.parentStepId === null) {
+    const openChild = executor
+      .select()
+      .from(stepTable)
+      .where(
+        and(
+          eq(stepTable.taskId, input.taskId),
+          eq(stepTable.parentStepId, input.stepId),
+          inArray(stepTable.status, openStepStatuses),
+        ),
+      )
+      .get()
+
+    if (openChild) {
+      throw new RpcError(
+        ErrorCode.INVALID_STEP_TRANSITION,
+        409,
+        `Cannot fail root step ${input.stepId} while child steps are still open`,
+      )
+    }
+  }
+
   const now = Date.now()
-  executor
+  const effectiveSessionId = input.sessionId ?? step.sessionId ?? undefined
+  const updateResult = executor
     .update(stepTable)
     .set({
       status: "failed",
       completedAt: now,
-      sessionId: input.sessionId ?? step.sessionId,
+      sessionId: effectiveSessionId,
       completionPayloadJson: input.reason ? JSON.stringify({ reason: input.reason }) : step.completionPayloadJson,
+      waitSpecJson: null,
+      waitSnapshotJson: null,
     })
-    .where(and(eq(stepTable.stepId, input.stepId), eq(stepTable.status, "active")))
+    .where(and(eq(stepTable.stepId, input.stepId), eq(stepTable.status, step.status)))
     .run()
+
+  if (affectedRowCount(updateResult) === 0) {
+    throw new RpcError(
+      ErrorCode.INVALID_STEP_TRANSITION,
+      409,
+      `Cannot fail task=${input.taskId} step=${input.stepId} from current state`,
+    )
+  }
 
   writeTaskEvent({
     executor,
@@ -44,7 +94,7 @@ export function failStep(input: FailStepInput, executor: DbExecutor = db()) {
       stepId: input.stepId,
       stepIndex: step.stepIndex,
       reason: input.reason ?? null,
-      sessionId: input.sessionId,
+      sessionId: effectiveSessionId,
     },
     createdAt: now,
   })
@@ -56,6 +106,8 @@ export function failStep(input: FailStepInput, executor: DbExecutor = db()) {
     })
     .where(and(eq(taskTable.taskId, input.taskId), eq(taskTable.status, "active")))
     .run()
+
+  wakeWaitingParentIfReady({ taskId: input.taskId, stepId: input.stepId, executor })
 
   return {
     taskId: input.taskId,

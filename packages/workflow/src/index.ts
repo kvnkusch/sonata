@@ -85,6 +85,72 @@ export type StepRunFail = {
 
 export type StepRunResult = StepRunComplete | StepRunFail
 
+export type WaitSpec = {
+  kind: "children"
+  childStepKey: string
+  workKeys?: string[]
+  until: "all_completed" | "all_terminal"
+  label?: string
+  details?: JsonValue
+}
+
+export type CompletionGuardResult =
+  | { ok: true }
+  | { ok: false; code: string; message: string; details?: JsonValue }
+
+export type ChildSpawnParams = {
+  stepKey: string
+  workKey: string
+  invocation?: unknown
+  artifactSelections?: Record<string, unknown>
+}
+
+export type ChildSummary = {
+  stepKey: string
+  totalCount: number
+  pendingCount: number
+  activeCount: number
+  blockedCount: number
+  orphanedCount: number
+  completedCount: number
+  failedCount: number
+  cancelledCount: number
+  incompleteWorkKeys: string[]
+  blockedWorkKeys: string[]
+  orphanedWorkKeys: string[]
+}
+
+export type ChildSpawnResult = {
+  stepId: string
+  stepKey: string
+  workKey: string
+  status: string
+  existing: boolean
+}
+
+export type ChildListEntry = {
+  stepId: string
+  stepKey: string
+  workKey: string | null
+  status: string
+}
+
+export type ChildArtifactRef = {
+  stepId: string
+  stepKey: string
+  workKey: string | null
+  artifactName: string
+  artifactKind: ArtifactKind
+  relativePath: string
+}
+
+export type StepChildrenContext = {
+  spawn: (params: ChildSpawnParams) => Promise<ChildSpawnResult>
+  list: (params?: { stepKey?: string; workKeys?: string[] }) => Promise<ChildListEntry[]>
+  summary: (params: { stepKey: string; workKeys?: string[] }) => Promise<ChildSummary>
+  readArtifacts: (params: { stepKey: string; artifactName: string; workKeys?: string[] }) => Promise<ChildArtifactRef[]>
+}
+
 export const stepResult = {
   completed(input?: { completionPayload?: unknown }): StepRunComplete {
     return {
@@ -294,9 +360,11 @@ export type StepContextBase<
   TJsonArtifactData extends Record<string, JsonValue> = Record<string, JsonValue>,
 > = {
   repoRoot: string
+  opsRoot: string
   taskId: string
   stepId: string
   inputs: TInputs
+  children: StepChildrenContext
   writeMarkdownArtifact: (params: {
     slug: TMarkdownSlug
     markdown: string
@@ -341,12 +409,20 @@ export type WorkflowStepWithOpenCodeDefinition<TTools extends OpenCodeTools = Op
 
 export type WorkflowStepDefinition = WorkflowStepWithoutOpenCodeDefinition | WorkflowStepWithOpenCodeDefinition
 
+// Runtime enforcement still limits `waitFor` to root/controller steps.
+// The authoring type surface does not model that distinction yet.
+type WaitForHandler<TContext> = (ctx: TContext) => Promise<WaitSpec | null> | WaitSpec | null
+
+type CanCompleteHandler<TContext> = (ctx: TContext) => Promise<CompletionGuardResult> | CompletionGuardResult
+
 type TypedWorkflowStepWithoutOpenCode<
   TSteps extends readonly WorkflowStepDefinition[],
   TStep extends WorkflowStepWithoutOpenCodeDefinition,
 > = Omit<TStep, "run" | "on"> & {
   run: (ctx: InferStepContextBase<TSteps, TStep>) => Promise<StepRunResult | void> | StepRunResult | void
   on: (ctx: InferStepContextBase<TSteps, TStep>, event: StepBaseEvent) => Promise<void> | void
+  waitFor?: WaitForHandler<InferStepContextBase<TSteps, TStep>>
+  canComplete?: CanCompleteHandler<InferStepContextBase<TSteps, TStep>>
 }
 
 type TypedWorkflowStepWithOpenCode<
@@ -357,9 +433,11 @@ type TypedWorkflowStepWithOpenCode<
     ctx: InferStepContextWithOpenCode<TSteps, TStep>,
   ) => Promise<StepRunResult | void> | StepRunResult | void
   on: (
-    ctx: InferStepContextWithOpenCode<TSteps, TStep>,
-    event: StepBaseEvent | OpenCodeStartedEvent | OpenCodeCompleteEvent,
-  ) => Promise<void> | void
+      ctx: InferStepContextWithOpenCode<TSteps, TStep>,
+      event: StepBaseEvent | OpenCodeStartedEvent | OpenCodeCompleteEvent,
+    ) => Promise<void> | void
+  waitFor?: WaitForHandler<InferStepContextWithOpenCode<TSteps, TStep>>
+  canComplete?: CanCompleteHandler<InferStepContextWithOpenCode<TSteps, TStep>>
 }
 
 export type WorkflowStepWithoutOpenCode<
@@ -536,10 +614,14 @@ type WorkflowStepImplementation<
       ctx: InferStepContextWithOpenCode<TSteps, TStep>,
       event: StepBaseEvent | OpenCodeStartedEvent | OpenCodeCompleteEvent,
     ) => Promise<void> | void
+    waitFor?: WaitForHandler<InferStepContextWithOpenCode<TSteps, TStep>>
+    canComplete?: CanCompleteHandler<InferStepContextWithOpenCode<TSteps, TStep>>
   }
   : {
     run: (ctx: InferStepContextBase<TSteps, TStep>) => Promise<StepRunResult | void> | StepRunResult | void
     on: (ctx: InferStepContextBase<TSteps, TStep>, event: StepBaseEvent) => Promise<void> | void
+    waitFor?: WaitForHandler<InferStepContextBase<TSteps, TStep>>
+    canComplete?: CanCompleteHandler<InferStepContextBase<TSteps, TStep>>
   }
 
 export type WorkflowStepImplementations<TSteps extends readonly WorkflowStepDefinition[]> = {

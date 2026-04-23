@@ -195,6 +195,38 @@ describe("step.start integration", () => {
     expect(startedEvents.length).toBe(2)
   })
 
+  for (const status of ["waiting", "blocked", "orphaned"] as const) {
+    it(`rejects starting a new root step when another root step is ${status}`, async () => {
+      const sandbox = mkdtempSync(path.join(tmpdir(), `sonata-start-step-${status}-`))
+      tempDirs.push(sandbox)
+
+      const projectRoot = path.join(sandbox, "project")
+      const opsRoot = path.join(sandbox, "ops")
+      mkdirSync(path.join(projectRoot, ".git"), { recursive: true })
+      mkdirSync(opsRoot, { recursive: true })
+      writeOpsWorkflowFiles(opsRoot)
+      process.env.SONATA_DB_PATH = path.join(sandbox, "db", "sonata.db")
+
+      const linked = db().transaction((tx) => {
+        return linkOpsRepo({ projectRoot, opsRoot, projectId: `prj_start_step_${status}` }, tx)
+      })
+
+      const started = await startTask({ projectId: linked.projectId, workflowRef: { name: "default" } })
+      const initial = await startStep({ taskId: started.taskId, stepKey: "plan" })
+      db().update(stepTable).set({ status }).where(eq(stepTable.stepId, initial.stepId)).run()
+
+      await expect(
+        startStep({
+          taskId: started.taskId,
+          stepKey: "execute",
+        }),
+      ).rejects.toMatchObject({
+        code: ErrorCode.INVALID_STEP_TRANSITION,
+        message: `Task already has an open root step: ${initial.stepId}`,
+      })
+    })
+  }
+
   it("resolves and freezes artifact + invocation inputs at step start", async () => {
     const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-start-step-inputs-"))
     tempDirs.push(sandbox)

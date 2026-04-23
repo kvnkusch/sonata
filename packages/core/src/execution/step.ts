@@ -1,25 +1,25 @@
 import { createServer } from "node:net"
-import { readFile } from "node:fs/promises"
-import path from "node:path"
 import { createOpencodeClient, createOpencodeServer, type Config } from "@opencode-ai/sdk/v2"
 import { eq } from "drizzle-orm"
 import { db, projectTable, stepTable, taskTable, type DbExecutor } from "../db"
 import { composeOpenCodeKickoffPrompt } from "./opencode-framework-prompt"
 import { staticSonataBridgePluginUrl } from "../opencode"
 import { ErrorCode, RpcError } from "../rpc/base"
-import { completeStep, failStep, parseStepInputsSnapshot, setStepSession, writeArtifactFromExecutionContext } from "../step"
+import {
+  completeStepWithGuards,
+  createStepContextBase,
+  failStep,
+  hydrateStepInputs,
+  parseStepInputsSnapshot,
+  setStepSession,
+} from "../step"
 import { resolveCustomToolNameMap } from "../step/get-toolset"
-import { completeTask } from "../task"
+import { enterWaitingIfNeeded, wakeWaitingParentIfReady } from "../step/waiting"
 import { loadWorkflowForTask } from "../workflow"
 import type {
-  StepContextBase,
   StepContextWithOpenCode,
-  StepInputs,
-  StepInputsSnapshot,
   StepRunResult,
-  WorkflowStep,
   WorkflowStepWithOpenCode,
-  JsonValue,
 } from "../workflow/module"
 
 export type ExecuteStepInput = {
@@ -28,7 +28,7 @@ export type ExecuteStepInput = {
 }
 
 export type ExecuteStepResult = {
-  status: "completed" | "blocked" | "failed"
+  status: "active" | "waiting" | "completed" | "blocked" | "failed"
   suggestedNextStepKey: string | null
   failure?: {
     reason: string
@@ -85,76 +85,6 @@ function isStepRunResult(value: unknown): value is StepRunResult {
   }
   const status = (value as { status?: unknown }).status
   return status === "completed" || status === "failed"
-}
-
-function isParserSchema(value: unknown): value is { parse: (input: unknown) => unknown } {
-  return typeof value === "object" && value !== null && "parse" in value && typeof value.parse === "function"
-}
-
-function toJsonValue(value: unknown, errorContext: string): JsonValue {
-  try {
-    return JSON.parse(JSON.stringify(value)) as JsonValue
-  } catch {
-    throw new Error(`${errorContext} must be JSON-serializable`)
-  }
-}
-
-async function hydrateStepInputs(input: {
-  taskId: string
-  stepId: string
-  opsRoot: string
-  workflowSteps: readonly WorkflowStep[]
-  snapshot: StepInputsSnapshot
-}): Promise<StepInputs> {
-  const stepById = new Map(input.workflowSteps.map((step) => [step.id, step] as const))
-  const hydratedArtifacts: StepInputs["artifacts"] = {}
-  const opsRootWithSep = input.opsRoot.endsWith(path.sep) ? input.opsRoot : `${input.opsRoot}${path.sep}`
-
-  for (const [bindingName, binding] of Object.entries(input.snapshot.artifacts)) {
-    const values = await Promise.all(
-      binding.refs.map(async (ref) => {
-        const artifactPath = path.resolve(input.opsRoot, ref.relativePath)
-        if (artifactPath !== input.opsRoot && !artifactPath.startsWith(opsRootWithSep)) {
-          throw new Error(
-            `Invalid artifact path outside ops root for task=${input.taskId} step=${input.stepId}: ${ref.relativePath}`,
-          )
-        }
-
-        const sourceStep = stepById.get(ref.stepKey)
-        const sourceArtifact = sourceStep?.artifacts?.find((artifact) => artifact.name === ref.artifactName)
-        if (sourceArtifact && sourceArtifact.kind !== ref.artifactKind) {
-          throw new Error(
-            `Artifact kind mismatch for input ${bindingName}: expected ${sourceArtifact.kind}, got ${ref.artifactKind}`,
-          )
-        }
-
-        const raw = await readFile(artifactPath, "utf8")
-        if (ref.artifactKind === "markdown") {
-          return raw
-        }
-
-        let parsed: unknown
-        try {
-          parsed = JSON.parse(raw)
-        } catch {
-          throw new Error(`Invalid JSON artifact for input ${bindingName}: ${ref.relativePath}`)
-        }
-
-        if (sourceArtifact?.kind === "json" && isParserSchema(sourceArtifact.schema)) {
-          parsed = sourceArtifact.schema.parse(parsed)
-        }
-
-        return toJsonValue(parsed, `Artifact ${ref.artifactName}`)
-      }),
-    )
-
-    hydratedArtifacts[bindingName] = binding.mode === "single" ? values[0] : values
-  }
-
-  return {
-    ...(typeof input.snapshot.invocation === "undefined" ? {} : { invocation: input.snapshot.invocation }),
-    artifacts: hydratedArtifacts,
-  }
 }
 
 function failureReasonFromStep(step: { completionPayloadJson: string | null }): string | undefined {
@@ -271,45 +201,14 @@ export async function executeStep(
     snapshot,
   })
 
-  const baseCtx: StepContextBase = {
-    repoRoot: project.projectRootRealpath,
+  const baseCtx = createStepContextBase({
     taskId: input.taskId,
     stepId: input.stepId,
+    projectRoot: project.projectRootRealpath,
+    opsRoot: project.opsRootRealpath,
     inputs,
-    writeMarkdownArtifact: async (params) => {
-      const written = await writeArtifactFromExecutionContext({
-        taskId: input.taskId,
-        stepId: input.stepId,
-        slug: params.slug,
-        kind: "markdown",
-        payload: { markdown: params.markdown },
-      })
-      return { kind: "markdown", path: written.relativePath }
-    },
-    writeJsonArtifact: async (params) => {
-      const written = await writeArtifactFromExecutionContext({
-        taskId: input.taskId,
-        stepId: input.stepId,
-        slug: params.slug,
-        kind: "json",
-        payload: { data: params.data },
-      })
-      return { kind: "json", path: written.relativePath }
-    },
-    completeStep: async (payload?: unknown) => {
-      return completeStep({
-        taskId: input.taskId,
-        stepId: input.stepId,
-        completionPayload: payload,
-      })
-    },
-    completeTask: async (payload?: unknown) => {
-      return completeTask({
-        taskId: input.taskId,
-        completionPayload: payload,
-      })
-    },
-  }
+    executor,
+  })
 
   let activeSession: ActiveOpenCodeSession | undefined
   const resolvedOpenCodeTools = isOpenCodeStep(workflowStep)
@@ -428,15 +327,16 @@ export async function executeStep(
 
     if (isStepRunResult(runResult)) {
       if (runResult.status === "completed") {
-        await completeStep({
+        const completion = await completeStepWithGuards({
           taskId: input.taskId,
           stepId: input.stepId,
           completionPayload: runResult.completionPayload,
-        })
-        await workflowStep.on(ctx as never, { type: "step.completed" } as never)
+        }, executor)
+        wakeWaitingParentIfReady({ taskId: input.taskId, stepId: input.stepId, executor })
+        await completion.workflowStep.on(completion.ctx as never, { type: "step.completed" } as never)
         return {
           status: "completed",
-          suggestedNextStepKey: workflowStep.next ?? null,
+          suggestedNextStepKey: completion.suggestedNextStepKey,
           opencode: activeSession,
         }
       }
@@ -460,7 +360,43 @@ export async function executeStep(
         opencode: activeSession,
       }
     }
+
+    const currentStep = executor.select().from(stepTable).where(eq(stepTable.stepId, input.stepId)).get()
+    if (currentStep?.status === "active" && workflowStep.waitFor) {
+      if (currentStep.parentStepId !== null) {
+        throw new RpcError(ErrorCode.INVALID_INPUT, 409, `Only root steps may wait for persisted conditions: ${input.stepId}`)
+      }
+
+      const waitSpec = await workflowStep.waitFor(ctx as never)
+      if (waitSpec) {
+        const enteredWaiting = enterWaitingIfNeeded({
+          taskId: input.taskId,
+          stepId: input.stepId,
+          stepIndex: currentStep.stepIndex,
+          waitSpec,
+          executor,
+        })
+        if (enteredWaiting) {
+          return {
+            status: "waiting",
+            suggestedNextStepKey: null,
+            opencode: activeSession,
+          }
+        }
+      }
+    }
   } catch (error) {
+    if (
+      error instanceof RpcError &&
+      (error.code === ErrorCode.REQUIRED_ARTIFACT_MISSING || error.code === ErrorCode.STEP_COMPLETION_GUARD_REJECTED)
+    ) {
+      return {
+        status: "active",
+        suggestedNextStepKey: null,
+        opencode: activeSession,
+      }
+    }
+
     const reason = safeErrorMessage(error)
     try {
       failStep(
@@ -491,7 +427,7 @@ export async function executeStep(
     await workflowStep.on(ctx as never, { type: "step.completed" } as never)
     return {
       status: "completed",
-      suggestedNextStepKey: workflowStep.next ?? null,
+      suggestedNextStepKey: updated.parentStepId === null ? workflowStep.next ?? null : null,
       opencode: activeSession,
     }
   }
@@ -507,10 +443,26 @@ export async function executeStep(
     }
   }
 
-  await workflowStep.on(ctx as never, { type: "step.blocked" } as never)
+  if (updated?.status === "blocked") {
+    await workflowStep.on(ctx as never, { type: "step.blocked" } as never)
+    return {
+      status: "blocked",
+      suggestedNextStepKey: null,
+      opencode: activeSession,
+    }
+  }
+
+  if (updated?.status === "waiting") {
+    return {
+      status: "waiting",
+      suggestedNextStepKey: null,
+      opencode: activeSession,
+    }
+  }
+
   return {
-    status: "blocked",
-    suggestedNextStepKey: workflowStep.next ?? null,
+    status: "active",
+    suggestedNextStepKey: null,
     opencode: activeSession,
   }
 }
@@ -552,51 +504,20 @@ export async function completeStepInRuntime(
     snapshot,
   })
 
-  const baseCtx: StepContextBase = {
-    repoRoot: project.projectRootRealpath,
+  const baseCtx = createStepContextBase({
     taskId: input.taskId,
     stepId: input.stepId,
+    projectRoot: project.projectRootRealpath,
+    opsRoot: project.opsRootRealpath,
     inputs: hydratedInputs,
-    writeMarkdownArtifact: async (params) => {
-      const written = await writeArtifactFromExecutionContext({
-        taskId: input.taskId,
-        stepId: input.stepId,
-        slug: params.slug,
-        kind: "markdown",
-        payload: { markdown: params.markdown },
-      })
-      return { kind: "markdown", path: written.relativePath }
-    },
-    writeJsonArtifact: async (params) => {
-      const written = await writeArtifactFromExecutionContext({
-        taskId: input.taskId,
-        stepId: input.stepId,
-        slug: params.slug,
-        kind: "json",
-        payload: { data: params.data },
-      })
-      return { kind: "json", path: written.relativePath }
-    },
-    completeStep: async (payload?: unknown) => {
-      return completeStep({
-        taskId: input.taskId,
-        stepId: input.stepId,
-        completionPayload: payload,
-      })
-    },
-    completeTask: async (payload?: unknown) => {
-      return completeTask({
-        taskId: input.taskId,
-        completionPayload: payload,
-      })
-    },
-  }
+    executor,
+  })
 
   const resolvedOpenCodeTools = isOpenCodeStep(workflowStep)
     ? resolveCustomToolNameMap({ stepKey: step.stepKey, tools: workflowStep.opencode.tools })
     : undefined
 
-  const ctx = isOpenCodeStep(workflowStep)
+  const _ctx = isOpenCodeStep(workflowStep)
     ? ({
         ...baseCtx,
         opencode: {
@@ -608,7 +529,7 @@ export async function completeStepInRuntime(
       } satisfies StepContextWithOpenCode)
     : baseCtx
 
-  const completion = await completeStep(
+  const completion = await completeStepWithGuards(
     {
       taskId: input.taskId,
       stepId: input.stepId,
@@ -617,11 +538,12 @@ export async function completeStepInRuntime(
     },
     executor,
   )
+  wakeWaitingParentIfReady({ taskId: input.taskId, stepId: input.stepId, executor })
 
   const completionSessionId = input.sessionId ?? step.sessionId ?? undefined
   if (isOpenCodeStep(workflowStep) && completionSessionId) {
-    await workflowStep.on(
-      ctx as never,
+    await completion.workflowStep.on(
+      completion.ctx as never,
       {
         type: "opencode.complete",
         manual: input.manual ?? false,
@@ -631,7 +553,7 @@ export async function completeStepInRuntime(
     )
   }
 
-  await workflowStep.on(ctx as never, { type: "step.completed" } as never)
+  await completion.workflowStep.on(completion.ctx as never, { type: "step.completed" } as never)
 
   return {
     status: "completed",

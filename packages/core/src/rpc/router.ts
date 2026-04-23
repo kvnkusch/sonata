@@ -10,10 +10,13 @@ import {
   cancelStep,
   completeStep,
   failStep,
+  getStep,
   getStepToolset,
   invokeStepTool,
   listStepInputArtifactCandidates,
   listStepsForTask,
+  resumeBlockedStep,
+  retryOrphanedStepInNewSession,
   startStep,
   writeStepArtifact,
 } from "../step"
@@ -26,10 +29,13 @@ import {
   StepCancelInput,
   StepCompleteInput,
   StepFailInput,
+  StepGetInput,
   StepGetToolsetInput,
   StepInvokeToolInput,
   StepListInputArtifactsInput,
   StepListInput,
+  StepResumeBlockedInput,
+  StepRetryOrphanedInput,
   StepStartInput,
   StepWriteArtifactInput,
   TaskListActiveInput,
@@ -115,20 +121,12 @@ export const router = {
         throw invalidInput(parsed.error)
       }
       const deleted = db().transaction((tx) => {
-        const task = tx
-          .select({ projectId: taskTable.projectId })
-          .from(taskTable)
-          .where(eq(taskTable.taskId, parsed.data.taskId))
-          .get()
+        const task = tx.select().from(taskTable).where(eq(taskTable.taskId, parsed.data.taskId)).get()
         if (!task) {
           throw new RpcError(ErrorCode.TASK_NOT_FOUND, 404, `Task not found: ${parsed.data.taskId}`)
         }
 
-        const project = tx
-          .select({ opsRootRealpath: projectTable.opsRootRealpath })
-          .from(projectTable)
-          .where(eq(projectTable.projectId, task.projectId))
-          .get()
+        const project = tx.select().from(projectTable).where(eq(projectTable.projectId, task.projectId)).get()
         if (!project) {
           throw new RpcError(ErrorCode.PROJECT_NOT_FOUND, 404, `Project not found: ${task.projectId}`)
         }
@@ -181,6 +179,13 @@ export const router = {
       }
       return getStepToolset(parsed.data)
     },
+    get(input: unknown) {
+      const parsed = StepGetInput.safeParse(input)
+      if (!parsed.success) {
+        throw invalidInput(parsed.error)
+      }
+      return getStep(parsed.data)
+    },
     async writeArtifact(input: unknown) {
       const parsed = StepWriteArtifactInput.safeParse(input)
       if (!parsed.success) {
@@ -201,6 +206,20 @@ export const router = {
         throw invalidInput(parsed.error)
       }
       return completeStep(parsed.data)
+    },
+    async resumeBlocked(input: unknown) {
+      const parsed = StepResumeBlockedInput.safeParse(input)
+      if (!parsed.success) {
+        throw invalidInput(parsed.error)
+      }
+      return resumeBlockedStep(parsed.data)
+    },
+    retryOrphanedInNewSession(input: unknown) {
+      const parsed = StepRetryOrphanedInput.safeParse(input)
+      if (!parsed.success) {
+        throw invalidInput(parsed.error)
+      }
+      return retryOrphanedStepInNewSession(parsed.data)
     },
     fail(input: unknown) {
       const parsed = StepFailInput.safeParse(input)

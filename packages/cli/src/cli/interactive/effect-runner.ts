@@ -5,7 +5,7 @@ import { loadWorkflowForTask, readOpsConfig } from "@sonata/core/workflow"
 import { attachOpencodeTui } from "../opencode/attach"
 import { UI } from "../ui"
 import { collectStepInputs } from "./collect-step-inputs"
-import type { Effect, InteractiveEvent, SharedCtx } from "./machine"
+import type { Effect, InteractiveEvent, OpenRootStepStatus, SharedCtx } from "./machine"
 
 export type LinkedProject = {
   projectId: string
@@ -20,10 +20,11 @@ export type EffectRuntime = {
   sharedCtx: SharedCtx | null
   listedTasks: Map<string, ActiveTask>
   lastStepResult: {
-    status: "completed" | "blocked" | "failed"
+    status: "active" | "waiting" | "completed" | "blocked" | "failed"
     suggestedNextStepKey: string | null
     failure?: { reason: string; details?: unknown }
   } | null
+  lastStepDetail: ReturnType<ReturnType<typeof createCaller>["step"]["get"]> | null
 }
 
 export type EffectRunnerDeps = {
@@ -35,6 +36,12 @@ export type EffectRunnerDeps = {
   collectStepInputs: typeof collectStepInputs
   executeStep: typeof executeStep
   attachOpencodeTui: typeof attachOpencodeTui
+}
+
+function isOpenRootStepStatus(
+  status: ActiveTask["currentRootStepStatus"] | undefined,
+): status is OpenRootStepStatus {
+  return status === "active" || status === "waiting" || status === "blocked" || status === "orphaned"
 }
 
 // TODO: Split this by effect family (prompt/core/output) into separate adapters as the
@@ -130,8 +137,12 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
           message: "Select active task",
           options: effect.taskIds.map((taskId) => {
             const task = runtime.listedTasks.get(taskId)
+            const rootSummary =
+              task?.currentRootStepId && task.currentRootStepKey && task.currentRootStepStatus
+                ? `, root=${task.currentRootStepKey} ${task.currentRootStepStatus}`
+                : ""
             return {
-              label: task ? `${task.taskId} (${task.workflowName})` : taskId,
+              label: task ? `${task.taskId} (${task.workflowName}${rootSummary})` : taskId,
               value: taskId,
             }
           }),
@@ -141,7 +152,16 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
         }
 
         const selected = runtime.listedTasks.get(choice)
-        return [{ type: "TASK_SELECTED", taskId: choice, currentStepId: selected?.currentStepId }]
+        return [
+          {
+            type: "TASK_SELECTED",
+            taskId: choice,
+            currentRootStepId: selected?.currentRootStepId ?? undefined,
+            currentRootStepStatus: isOpenRootStepStatus(selected?.currentRootStepStatus)
+              ? selected.currentRootStepStatus
+              : undefined,
+          },
+        ]
       }
 
       case "PROMPT_SELECT_STEP": {
@@ -211,6 +231,7 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
 
       case "EXECUTE_STEP": {
         try {
+          runtime.lastStepDetail = null
           const result = await deps.executeStep({ taskId: effect.taskId, stepId: effect.stepId })
           runtime.lastStepResult = {
             status: result.status,
@@ -252,27 +273,6 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
 
       case "PRINT_STEP_RESULT": {
         if (runtime.lastStepResult) {
-          if (
-            runtime.lastStepResult.status === "blocked" &&
-            runtime.sharedCtx?.activeTaskId &&
-            runtime.sharedCtx.activeStepId
-          ) {
-            const steps = caller.step.list({ taskId: runtime.sharedCtx.activeTaskId })
-            const current = steps.find((step) => step.stepId === runtime.sharedCtx?.activeStepId)
-            if (current?.status === "completed") {
-              runtime.lastStepResult = {
-                ...runtime.lastStepResult,
-                status: "completed",
-              }
-            } else if (current?.status === "failed") {
-              runtime.lastStepResult = {
-                status: "failed",
-                suggestedNextStepKey: null,
-                ...(runtime.lastStepResult.failure ? { failure: runtime.lastStepResult.failure } : {}),
-              }
-            }
-          }
-
           deps.ui.println("step_status:", runtime.lastStepResult.status)
           deps.ui.println("suggested_next_step:", runtime.lastStepResult.suggestedNextStepKey ?? "none")
           if (runtime.lastStepResult.failure) {
@@ -285,24 +285,154 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
         return []
       }
 
+      case "GET_STEP": {
+        try {
+          const detail = caller.step.get({ taskId: effect.taskId, stepId: effect.stepId })
+          runtime.lastStepDetail = detail
+          return [{ type: "STEP_STATUS_LOADED", status: detail.status }]
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Failed to load step details"
+          return [{ type: "STEP_ACTION_FAILED", message }]
+        }
+      }
+
+      case "PRINT_STEP_DETAILS": {
+        const detail = runtime.lastStepDetail
+        if (!detail) {
+          return []
+        }
+
+        deps.ui.println("step_detail_status:", detail.status)
+        deps.ui.println("step_detail_key:", detail.stepKey)
+        deps.ui.println("step_detail_session:", detail.sessionId ?? "none")
+        deps.ui.println("step_detail_base_url:", detail.opencodeBaseUrl ?? "none")
+        if (detail.waitSpec) {
+          deps.ui.println("wait_spec:", JSON.stringify(detail.waitSpec))
+        }
+        if (detail.waitSnapshot) {
+          deps.ui.println("wait_snapshot:", JSON.stringify(detail.waitSnapshot))
+        }
+        if (detail.blockPayload) {
+          deps.ui.println("block_payload:", JSON.stringify(detail.blockPayload))
+        }
+        if (detail.orphanedReason) {
+          deps.ui.println("orphaned_reason:", JSON.stringify(detail.orphanedReason))
+        }
+        return []
+      }
+
+      case "PRINT_CHILD_STEPS": {
+        if (!runtime.sharedCtx?.activeTaskId || !runtime.lastStepDetail) {
+          return []
+        }
+
+        const detail = runtime.lastStepDetail
+        const waitSpec = detail.waitSpec as { kind?: string; childStepKey?: string; workKeys?: string[] } | null | undefined
+        const children = caller
+          .step
+          .list({ taskId: runtime.sharedCtx.activeTaskId })
+          .filter((step) => step.parentStepId === detail.stepId)
+          .filter((step) => (waitSpec?.kind === "children" && waitSpec.childStepKey ? step.stepKey === waitSpec.childStepKey : true))
+          .filter((step) => (waitSpec?.kind === "children" && waitSpec.workKeys ? waitSpec.workKeys.includes(step.workKey ?? "") : true))
+
+        if (children.length === 0) {
+          deps.ui.println("child_steps:", "none")
+          return []
+        }
+
+        deps.ui.println("child_steps:")
+        for (const child of children) {
+          deps.ui.println(`  [${child.stepIndex}]`, `${child.stepKey}`, `work=${child.workKey ?? "none"}`, `status=${child.status}`)
+        }
+        return []
+      }
+
       case "PROMPT_STEP_ACTIONS": {
+        const attachAvailable =
+          effect.rootStepStatus === "blocked" &&
+          runtime.lastStepDetail?.sessionId !== null &&
+          typeof runtime.lastStepDetail?.sessionId === "string" &&
+          runtime.lastStepDetail?.opencodeBaseUrl !== null &&
+          typeof runtime.lastStepDetail?.opencodeBaseUrl === "string"
+
+        const options =
+          effect.rootStepStatus === "active"
+            ? [
+                { label: "Retry step", value: "retry" },
+                { label: "Mark failed", value: "fail" },
+                { label: "Cancel step", value: "cancel" },
+                { label: "Back to task menu", value: "back" },
+                { label: "Status", value: "status" },
+              ]
+            : effect.rootStepStatus === "waiting"
+              ? [
+                  { label: "Refresh waiting status", value: "refresh" },
+                  { label: "Inspect child steps", value: "inspect_children" },
+                  { label: "Back to main menu", value: "back" },
+                ]
+              : effect.rootStepStatus === "blocked"
+                ? [
+                    ...(attachAvailable ? ([{ label: "Attach to existing session", value: "attach" }] as const) : []),
+                    { label: "Resume blocked step", value: "resume" },
+                    { label: "Mark failed", value: "fail" },
+                    { label: "Cancel step", value: "cancel" },
+                    { label: "Back to main menu", value: "back" },
+                    { label: "Status", value: "status" },
+                  ]
+                : [
+                    { label: "Retry in new session", value: "retry_new_session" },
+                    { label: "Mark failed", value: "fail" },
+                    { label: "Cancel step", value: "cancel" },
+                    { label: "Back to main menu", value: "back" },
+                    { label: "Status", value: "status" },
+                  ]
+
         const action = await deps.prompts.select({
           message: "Step actions",
-          options: [
-            { label: "Retry step", value: "retry" },
-            { label: "Mark failed", value: "fail" },
-            { label: "Cancel step", value: "cancel" },
-            { label: "Back to task menu", value: "back" },
-            { label: "Status", value: "status" },
-          ],
+          options,
         })
         if (deps.prompts.isCancel(action) || action === "back") {
           return [{ type: "USER_BACK" }]
         }
+        if (action === "attach") {
+          return [
+            {
+              type: "STEP_ACTION_ATTACH",
+              baseUrl: runtime.lastStepDetail!.opencodeBaseUrl!,
+              sessionId: runtime.lastStepDetail!.sessionId!,
+            },
+          ]
+        }
+        if (action === "inspect_children") return [{ type: "STEP_ACTION_INSPECT_CHILDREN" }]
+        if (action === "refresh") return [{ type: "STEP_ACTION_REFRESH" }]
         if (action === "retry") return [{ type: "STEP_ACTION_RETRY" }]
+        if (action === "resume") return [{ type: "STEP_ACTION_RESUME" }]
+        if (action === "retry_new_session") return [{ type: "STEP_ACTION_RETRY_IN_NEW_SESSION" }]
         if (action === "fail") return [{ type: "STEP_ACTION_FAIL" }]
         if (action === "cancel") return [{ type: "STEP_ACTION_CANCEL" }]
         return [{ type: "STEP_ACTION_STATUS" }]
+      }
+
+      case "RESUME_BLOCKED_STEP": {
+        try {
+          const resumed = await caller.step.resumeBlocked({ taskId: effect.taskId, stepId: effect.stepId })
+          runtime.lastStepDetail = null
+          return [{ type: "STEP_RESUME_OK", status: resumed.status }]
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Failed to resume blocked step"
+          return [{ type: "STEP_ACTION_FAILED", message }]
+        }
+      }
+
+      case "RETRY_ORPHANED_STEP": {
+        try {
+          caller.step.retryOrphanedInNewSession({ taskId: effect.taskId, stepId: effect.stepId })
+          runtime.lastStepDetail = null
+          return [{ type: "STEP_RETRY_OK" }]
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Failed to retry orphaned step"
+          return [{ type: "STEP_ACTION_FAILED", message }]
+        }
       }
 
       case "FAIL_STEP": {
@@ -325,15 +455,17 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
         }
       }
 
-      case "CHECK_STEP_ACTIVE": {
-        const steps = caller.step.list({ taskId: effect.taskId })
-        const current = steps.find((step) => step.stepId === effect.stepId)
-        return [{ type: "STEP_STILL_ACTIVE", active: current?.status === "active" }]
-      }
-
       case "CHECK_TASK_ACTIVE": {
         const active = caller.task.listActive({ projectId: effect.projectId })
-        return [{ type: "TASK_STILL_ACTIVE", active: active.some((task) => task.taskId === effect.taskId) }]
+        const task = active.find((item) => item.taskId === effect.taskId)
+        return [
+          {
+            type: "TASK_STILL_ACTIVE",
+            active: Boolean(task),
+            currentRootStepId: task?.currentRootStepId ?? undefined,
+            currentRootStepStatus: isOpenRootStepStatus(task?.currentRootStepStatus) ? task.currentRootStepStatus : undefined,
+          },
+        ]
       }
 
       case "PROMPT_TASK_CONTINUATION": {

@@ -20,9 +20,25 @@ function makeCallerStub(overrides?: any): ReturnType<typeof createCaller> {
     step: {
       start: async () => ({ stepId: "stp_default" }),
       list: () => [],
+      get: () => ({
+        stepId: "stp_default",
+        stepKey: "plan",
+        stepIndex: 1,
+        status: "active" as const,
+        parentStepId: null,
+        workKey: null,
+        sessionId: null,
+        opencodeBaseUrl: null,
+        waitSpec: null,
+        waitSnapshot: null,
+        blockPayload: null,
+        orphanedReason: null,
+      }),
       getToolset: async () => ({ tools: [] }),
       writeArtifact: async () => ({ relativePath: "" }),
       complete: async () => ({ status: "completed", suggestedNextStepKey: null }),
+      resumeBlocked: async () => ({ status: "active" as const, taskId: "tsk_default", stepId: "stp_default" }),
+      retryOrphanedInNewSession: () => ({ status: "active" as const, taskId: "tsk_default", stepId: "stp_default" }),
       fail: () => ({ status: "failed" }),
       cancel: () => ({ status: "cancelled" }),
     },
@@ -31,8 +47,8 @@ function makeCallerStub(overrides?: any): ReturnType<typeof createCaller> {
   return {
     ...(base as object),
     ...(overrides as object),
-    task: { ...(base.task as object), ...((overrides?.task as object) ?? {}) },
-    step: { ...(base.step as object), ...((overrides?.step as object) ?? {}) },
+    task: { ...(base.task as object), ...(overrides?.task as object) },
+    step: { ...(base.step as object), ...(overrides?.step as object) },
   } as ReturnType<typeof createCaller>
 }
 
@@ -73,6 +89,7 @@ function makeRuntime(caller = makeCallerStub()): EffectRuntime {
     },
     listedTasks: new Map(),
     lastStepResult: null,
+    lastStepDetail: null,
   }
 }
 
@@ -233,7 +250,7 @@ describe("interactive effect runner", () => {
     expect(printed).toContain("No active tasks")
   })
 
-  it("includes currentStepId when selecting active task", async () => {
+  it("includes current root step status when selecting a task", async () => {
     const caller = makeCallerStub({
       task: {
         start: async () => ({
@@ -250,8 +267,9 @@ describe("interactive effect runner", () => {
             status: "active",
             createdAt: 1,
             updatedAt: 1,
-            currentStepId: "stp_1",
-            currentStepIndex: 1,
+            currentRootStepId: "stp_1",
+            currentRootStepKey: "plan",
+            currentRootStepStatus: "active",
           },
         ],
       },
@@ -281,8 +299,70 @@ describe("interactive effect runner", () => {
     const runtime = makeRuntime(caller)
     await runEffect({ type: "LIST_ACTIVE_TASKS", projectId: "prj_test" }, runtime)
     const selected = await runEffect({ type: "PROMPT_SELECT_TASK", taskIds: ["tsk_1"] }, runtime)
-    expect(selected).toEqual([{ type: "TASK_SELECTED", taskId: "tsk_1", currentStepId: "stp_1" }])
+    expect(selected).toEqual([
+      {
+        type: "TASK_SELECTED",
+        taskId: "tsk_1",
+        currentRootStepId: "stp_1",
+        currentRootStepStatus: "active",
+      },
+    ])
   })
+
+  for (const status of ["waiting", "blocked", "orphaned"] as const) {
+    it(`does not resume directly when the current root step is ${status}`, async () => {
+      const caller = makeCallerStub({
+        task: {
+          listActive: () => [
+            {
+              taskId: "tsk_1",
+              projectId: "prj_test",
+              workflowName: "default",
+              status: "active",
+              createdAt: 1,
+              updatedAt: 1,
+              currentRootStepId: "stp_1",
+              currentRootStepKey: "plan",
+              currentRootStepStatus: status,
+            },
+          ],
+        },
+      })
+      const runEffect = createEffectRunner({
+        prompts: makePrompts("tsk_1"),
+        ui: {
+          println() {},
+          error() {},
+        },
+        async ensureLinkedProject() {
+          return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
+        },
+        readOpsConfig,
+        async loadWorkflowForTask() {
+          return { workflow: { steps: [] } } as never
+        },
+        async collectStepInputs() {
+          return {}
+        },
+        async executeStep() {
+          return { status: "completed", suggestedNextStepKey: null }
+        },
+        async attachOpencodeTui() {},
+      })
+
+      const runtime = makeRuntime(caller)
+      await runEffect({ type: "LIST_ACTIVE_TASKS", projectId: "prj_test" }, runtime)
+      const selected = await runEffect({ type: "PROMPT_SELECT_TASK", taskIds: ["tsk_1"] }, runtime)
+        expect(selected).toEqual([
+          {
+            type: "TASK_SELECTED",
+            taskId: "tsk_1",
+            currentRootStepId: "stp_1",
+            currentRootStepStatus: status,
+          },
+        ])
+      })
+    }
 
   it("stores last step result from execute effect", async () => {
     const runEffect = createEffectRunner({
@@ -602,15 +682,23 @@ describe("interactive effect runner", () => {
     expect(result).toEqual([{ type: "STEP_SELECTED", stepKey: "research" }])
   })
 
-  it("checks step activity against current DB status", async () => {
-    const activeCaller = makeCallerStub({
+  it("loads step details with step.get", async () => {
+    const caller = makeCallerStub({
       step: {
-        list: () => [{ stepId: "stp_1", status: "active" }],
-      },
-    })
-    const inactiveCaller = makeCallerStub({
-      step: {
-        list: () => [{ stepId: "stp_1", status: "completed" }],
+        get: () => ({
+          stepId: "stp_1",
+          stepKey: "plan",
+          stepIndex: 1,
+          status: "waiting",
+          parentStepId: null,
+          workKey: null,
+          sessionId: null,
+          opencodeBaseUrl: null,
+          waitSpec: { kind: "children", childStepKey: "worker" },
+          waitSnapshot: { totalCount: 1, activeCount: 1, completedCount: 0 },
+          blockPayload: null,
+          orphanedReason: null,
+        }),
       },
     })
 
@@ -633,13 +721,11 @@ describe("interactive effect runner", () => {
       async attachOpencodeTui() {},
     })
 
-    await expect(
-      runEffect({ type: "CHECK_STEP_ACTIVE", taskId: "tsk_1", stepId: "stp_1" }, makeRuntime(activeCaller)),
-    ).resolves.toEqual([{ type: "STEP_STILL_ACTIVE", active: true }])
-
-    await expect(
-      runEffect({ type: "CHECK_STEP_ACTIVE", taskId: "tsk_1", stepId: "stp_1" }, makeRuntime(inactiveCaller)),
-    ).resolves.toEqual([{ type: "STEP_STILL_ACTIVE", active: false }])
+    const runtime = makeRuntime(caller)
+    await expect(runEffect({ type: "GET_STEP", taskId: "tsk_1", stepId: "stp_1" }, runtime)).resolves.toEqual([
+      { type: "STEP_STATUS_LOADED", status: "waiting" },
+    ])
+    expect(runtime.lastStepDetail).toMatchObject({ status: "waiting", waitSnapshot: { totalCount: 1 } })
   })
 
   it("prints status with step index/name/status", async () => {
@@ -753,11 +839,139 @@ describe("interactive effect runner", () => {
     expect(lines).toContain('failure_details: {"code":"E_VALIDATION"}')
   })
 
-  it("prints refreshed completed status when blocked step finishes externally", async () => {
+  it("prints waiting step details", async () => {
     const lines: string[] = []
     const caller = makeCallerStub({
       step: {
-        list: () => [{ stepId: "stp_1", status: "completed" }],
+        get: () => ({
+          stepId: "stp_1",
+          stepKey: "plan",
+          stepIndex: 1,
+          status: "waiting",
+          parentStepId: null,
+          workKey: null,
+          sessionId: null,
+          opencodeBaseUrl: null,
+          waitSpec: { kind: "children", childStepKey: "worker" },
+          waitSnapshot: { totalCount: 1, activeCount: 1, completedCount: 0 },
+          blockPayload: null,
+          orphanedReason: null,
+        }),
+      },
+    })
+    const runEffect = createEffectRunner({
+      prompts: makePrompts("unused"),
+      ui: {
+        println(...args: string[]) {
+          lines.push(args.join(" "))
+        },
+        error() {},
+      },
+      async ensureLinkedProject() {
+        return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
+      },
+      readOpsConfig,
+      async loadWorkflowForTask() {
+        return { workflow: { steps: [] } } as never
+      },
+      async collectStepInputs() {
+        return {}
+      },
+      async executeStep() {
+        return { status: "completed", suggestedNextStepKey: null }
+      },
+      async attachOpencodeTui() {},
+    })
+
+    const runtime = makeRuntime(caller)
+    await runEffect({ type: "GET_STEP", taskId: "tsk_1", stepId: "stp_1" }, runtime)
+    await runEffect({ type: "PRINT_STEP_DETAILS" }, runtime)
+
+    expect(lines).toContain("step_detail_status: waiting")
+    expect(lines).toContain('wait_snapshot: {"totalCount":1,"activeCount":1,"completedCount":0}')
+  })
+
+  it("offers blocked step attach from persisted step detail", async () => {
+    let labels: string[] = []
+    const runEffect = createEffectRunner({
+      prompts: {
+        async select<Value>(opts: any): Promise<Value> {
+          labels = opts.options.map((option: { label?: string }) => option.label ?? "")
+          return "attach" as Value
+        },
+        isCancel(value: unknown) {
+          return value === CANCEL
+        },
+        outro() {},
+      },
+      ui: { println() {}, error() {} },
+      async ensureLinkedProject() {
+        return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
+      },
+      readOpsConfig,
+      async loadWorkflowForTask() {
+        return { workflow: { steps: [] } } as never
+      },
+      async collectStepInputs() {
+        return {}
+      },
+      async executeStep() {
+        return { status: "completed", suggestedNextStepKey: null }
+      },
+      async attachOpencodeTui() {},
+    })
+
+    const runtime = makeRuntime()
+    runtime.lastStepDetail = {
+      stepId: "stp_1",
+      stepKey: "plan",
+      stepIndex: 1,
+      status: "blocked",
+      parentStepId: null,
+      workKey: null,
+      sessionId: "ses_1",
+      opencodeBaseUrl: "http://127.0.0.1:1234",
+      waitSpec: null,
+      waitSnapshot: null,
+      blockPayload: { code: "needs_input" },
+      orphanedReason: null,
+    }
+
+    const result = await runEffect({ type: "PROMPT_STEP_ACTIONS", rootStepStatus: "blocked" }, runtime)
+    expect(labels).toContain("Attach to existing session")
+    expect(result).toEqual([{ type: "STEP_ACTION_ATTACH", baseUrl: "http://127.0.0.1:1234", sessionId: "ses_1" }])
+  })
+
+  it("prints child steps scoped to the current waiting controller", async () => {
+    const lines: string[] = []
+    const caller = makeCallerStub({
+      step: {
+        list: () => [
+          {
+            stepId: "stp_child_1",
+            stepKey: "worker",
+            stepIndex: 2,
+            status: "active",
+            parentStepId: "stp_1",
+            workKey: "alpha",
+          },
+          {
+            stepId: "stp_child_2",
+            stepKey: "worker",
+            stepIndex: 3,
+            status: "completed",
+            parentStepId: "stp_1",
+            workKey: "beta",
+          },
+          {
+            stepId: "stp_other",
+            stepKey: "worker",
+            stepIndex: 4,
+            status: "active",
+            parentStepId: "other_parent",
+            workKey: "gamma",
+          },
+        ],
       },
     })
     const runEffect = createEffectRunner({
@@ -790,14 +1004,86 @@ describe("interactive effect runner", () => {
       activeTaskId: "tsk_1",
       activeStepId: "stp_1",
     }
-    runtime.lastStepResult = {
-      status: "blocked",
-      suggestedNextStepKey: "research",
+    runtime.lastStepDetail = {
+      stepId: "stp_1",
+      stepKey: "controller",
+      stepIndex: 1,
+      status: "waiting",
+      parentStepId: null,
+      workKey: null,
+      sessionId: null,
+      opencodeBaseUrl: null,
+      waitSpec: { kind: "children", childStepKey: "worker", workKeys: ["alpha"] },
+      waitSnapshot: { totalCount: 1, activeCount: 1, completedCount: 0 },
+      blockPayload: null,
+      orphanedReason: null,
     }
 
-    await runEffect({ type: "PRINT_STEP_RESULT" }, runtime)
+    await runEffect({ type: "PRINT_CHILD_STEPS" }, runtime)
 
-    expect(lines).toContain("step_status: completed")
-    expect(lines).toContain("suggested_next_step: research")
+    expect(lines).toContain("child_steps:")
+    expect(lines).toContain("  [2] worker work=alpha status=active")
+    expect(lines).not.toContain("  [3] worker work=beta status=completed")
+    expect(lines).not.toContain("  [4] worker work=gamma status=active")
+  })
+
+  it("resumes blocked steps through the new RPC", async () => {
+    const caller = makeCallerStub({
+      step: {
+        resumeBlocked: async () => ({ status: "orphaned" as const, taskId: "tsk_1", stepId: "stp_1" }),
+      },
+    })
+    const runEffect = createEffectRunner({
+      prompts: makePrompts("unused"),
+      ui: { println() {}, error() {} },
+      async ensureLinkedProject() {
+        return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
+      },
+      readOpsConfig,
+      async loadWorkflowForTask() {
+        return { workflow: { steps: [] } } as never
+      },
+      async collectStepInputs() {
+        return {}
+      },
+      async executeStep() {
+        return { status: "completed", suggestedNextStepKey: null }
+      },
+      async attachOpencodeTui() {},
+    })
+
+    await expect(
+      runEffect({ type: "RESUME_BLOCKED_STEP", taskId: "tsk_1", stepId: "stp_1" }, makeRuntime(caller)),
+    ).resolves.toEqual([{ type: "STEP_RESUME_OK", status: "orphaned" }])
+  })
+
+  it("retries orphaned steps in a new session", async () => {
+    const caller = makeCallerStub({
+      step: {
+        retryOrphanedInNewSession: () => ({ status: "active" as const, taskId: "tsk_1", stepId: "stp_1" }),
+      },
+    })
+    const runEffect = createEffectRunner({
+      prompts: makePrompts("unused"),
+      ui: { println() {}, error() {} },
+      async ensureLinkedProject() {
+        return { projectId: "prj_test", projectRoot: "/tmp/project", opsRoot: "/tmp/ops" }
+      },
+      readOpsConfig,
+      async loadWorkflowForTask() {
+        return { workflow: { steps: [] } } as never
+      },
+      async collectStepInputs() {
+        return {}
+      },
+      async executeStep() {
+        return { status: "completed", suggestedNextStepKey: null }
+      },
+      async attachOpencodeTui() {},
+    })
+
+    await expect(
+      runEffect({ type: "RETRY_ORPHANED_STEP", taskId: "tsk_1", stepId: "stp_1" }, makeRuntime(caller)),
+    ).resolves.toEqual([{ type: "STEP_RETRY_OK" }])
   })
 })

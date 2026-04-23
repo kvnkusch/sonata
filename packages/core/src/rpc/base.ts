@@ -6,6 +6,9 @@ export const ErrorCode = {
   WORKFLOW_NOT_FOUND: "WORKFLOW_NOT_FOUND",
   TASK_NOT_FOUND: "TASK_NOT_FOUND",
   STEP_NOT_FOUND: "STEP_NOT_FOUND",
+  STEP_COMPLETION_GUARD_REJECTED: "STEP_COMPLETION_GUARD_REJECTED",
+  STEP_SESSION_MISSING: "STEP_SESSION_MISSING",
+  CHILD_STEP_CONFLICT: "CHILD_STEP_CONFLICT",
   ARTIFACT_NOT_DECLARED: "ARTIFACT_NOT_DECLARED",
   ARTIFACT_KIND_MISMATCH: "ARTIFACT_KIND_MISMATCH",
   ARTIFACT_WRITE_ONCE_VIOLATION: "ARTIFACT_WRITE_ONCE_VIOLATION",
@@ -21,6 +24,7 @@ export class RpcError extends Error {
     readonly code: ErrorCode,
     readonly status: number,
     message: string,
+    readonly details?: unknown,
   ) {
     super(message)
     this.name = "RpcError"
@@ -61,6 +65,11 @@ export const TaskDeleteInput = z.object({
 })
 
 export const StepGetToolsetInput = z.object({
+  taskId: z.string().min(1),
+  stepId: z.string().min(1),
+})
+
+export const StepGetInput = z.object({
   taskId: z.string().min(1),
   stepId: z.string().min(1),
 })
@@ -112,6 +121,28 @@ export const StepCompleteInput = z.object({
   stepId: z.string().min(1),
   completionPayload: z.unknown().optional(),
   sessionId: z.string().min(1).optional(),
+})
+
+export const StepBlockInput = z.object({
+  taskId: z.string().min(1),
+  stepId: z.string().min(1),
+  blockPayload: z.object({
+    code: z.string().min(1),
+    message: z.string().min(1),
+    details: z.unknown().optional(),
+    resumeHint: z.string().min(1).optional(),
+  }),
+  sessionId: z.string().min(1).optional(),
+})
+
+export const StepResumeBlockedInput = z.object({
+  taskId: z.string().min(1),
+  stepId: z.string().min(1),
+})
+
+export const StepRetryOrphanedInput = z.object({
+  taskId: z.string().min(1),
+  stepId: z.string().min(1),
 })
 
 export const StepFailInput = z.object({

@@ -9,18 +9,21 @@ export function listStepsForTask(input: { taskId: string }, executor: DbExecutor
   }
 
   const rows = executor
-    .select({
-      stepId: stepTable.stepId,
-      stepKey: stepTable.stepKey,
-      stepIndex: stepTable.stepIndex,
-      status: stepTable.status,
-      startedAt: stepTable.startedAt,
-      completedAt: stepTable.completedAt,
-    })
+    .select()
     .from(stepTable)
     .where(eq(stepTable.taskId, input.taskId))
     .orderBy(asc(stepTable.stepIndex))
     .all()
 
-  return rows
+  return rows.map((row) => ({
+    stepId: row.stepId,
+    stepKey: row.stepKey,
+    stepIndex: row.stepIndex,
+    status: row.status,
+    parentStepId: row.parentStepId,
+    workKey: row.workKey,
+    sessionId: row.sessionId,
+    startedAt: row.startedAt,
+    completedAt: row.completedAt,
+  }))
 }

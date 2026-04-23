@@ -173,7 +173,7 @@ describe("interactive machine transitions", () => {
     ])
   })
 
-  it("blocked execute checks whether step is still active", () => {
+  it("waiting execute loads step details before prompting for actions", () => {
     const main = linkedMainMenuState()
     const executing: InteractiveState = {
       status: "executing_step",
@@ -186,27 +186,28 @@ describe("interactive machine transitions", () => {
       },
     }
 
-    const blocked = transition(executing, {
+    const waiting = transition(executing, {
       type: "STEP_EXECUTE_OK",
       result: {
-        status: "blocked",
+        status: "waiting",
         suggestedNextStepKey: "research",
       },
     })
 
-    expect(blocked.state.status).toBe("step_actions")
-    expect(blocked.effects).toEqual([
+    expect(waiting.state.status).toBe("step_actions")
+    expect(waiting.effects).toEqual([
       { type: "PRINT_STEP_RESULT" },
-      { type: "CHECK_STEP_ACTIVE", taskId: "tsk_1", stepId: "stp_1" },
+      { type: "GET_STEP", taskId: "tsk_1", stepId: "stp_1" },
     ])
   })
 
-  it("step actions exits to task continuation when step is no longer active", () => {
+  it("blocked execute loads step details before prompting for actions", () => {
     const main = linkedMainMenuState()
     const stepActions: InteractiveState = {
       status: "step_actions",
       taskId: "tsk_1",
       stepId: "stp_1",
+      rootStepStatus: "blocked",
       shared: {
         ...(main.status === "main_menu" ? main.shared : ({} as never)),
         activeTaskId: "tsk_1",
@@ -214,7 +215,29 @@ describe("interactive machine transitions", () => {
       },
     }
 
-    const transitioned = transition(stepActions, { type: "STEP_STILL_ACTIVE", active: false })
+    const transitioned = transition(stepActions, { type: "STEP_STATUS_LOADED", status: "blocked" })
+    expect(transitioned.state.status).toBe("step_actions")
+    expect(transitioned.effects).toEqual([
+      { type: "PRINT_STEP_DETAILS" },
+      { type: "PROMPT_STEP_ACTIONS", rootStepStatus: "blocked" },
+    ])
+  })
+
+  it("step actions exits to task continuation when step becomes terminal", () => {
+    const main = linkedMainMenuState()
+    const stepActions: InteractiveState = {
+      status: "step_actions",
+      taskId: "tsk_1",
+      stepId: "stp_1",
+      rootStepStatus: "waiting",
+      shared: {
+        ...(main.status === "main_menu" ? main.shared : ({} as never)),
+        activeTaskId: "tsk_1",
+        activeStepId: "stp_1",
+      },
+    }
+
+    const transitioned = transition(stepActions, { type: "STEP_STATUS_LOADED", status: "completed" })
     expect(transitioned.state.status).toBe("task_continuation")
     if (transitioned.state.status === "task_continuation") {
       expect(transitioned.state.shared.activeStepId).toBeNull()
@@ -235,7 +258,31 @@ describe("interactive machine transitions", () => {
     expect(inactive.effects).toEqual([{ type: "PROMPT_MAIN_MENU" }])
   })
 
-  it("resume task with active step jumps to execute", () => {
+  it("task continuation with waiting root step returns to step actions", () => {
+    const main = linkedMainMenuState()
+    const continuation: InteractiveState = {
+      status: "task_continuation",
+      taskId: "tsk_1",
+      shared: main.status === "main_menu" ? main.shared : ({} as never),
+    }
+
+    const waiting = transition(continuation, {
+      type: "TASK_STILL_ACTIVE",
+      active: true,
+      currentRootStepId: "stp_1",
+      currentRootStepStatus: "waiting",
+    })
+
+    expect(waiting.state.status).toBe("step_actions")
+    if (waiting.state.status === "step_actions") {
+      expect(waiting.state.stepId).toBe("stp_1")
+      expect(waiting.state.rootStepStatus).toBe("waiting")
+      expect(waiting.state.shared.activeStepId).toBe("stp_1")
+    }
+    expect(waiting.effects).toEqual([{ type: "GET_STEP", taskId: "tsk_1", stepId: "stp_1" }])
+  })
+
+  it("resume task with active root step jumps to execute", () => {
     const main = linkedMainMenuState()
     const selecting: InteractiveState = {
       status: "selecting_task",
@@ -243,13 +290,90 @@ describe("interactive machine transitions", () => {
       shared: main.status === "main_menu" ? main.shared : ({} as never),
     }
 
-    const resumed = transition(selecting, { type: "TASK_SELECTED", taskId: "tsk_1", currentStepId: "stp_1" })
+    const resumed = transition(selecting, {
+      type: "TASK_SELECTED",
+      taskId: "tsk_1",
+      currentRootStepId: "stp_1",
+      currentRootStepStatus: "active",
+    })
     expect(resumed.state.status).toBe("executing_step")
     if (resumed.state.status === "executing_step") {
       expect(resumed.state.stepId).toBe("stp_1")
       expect(resumed.state.shared.activeStepId).toBe("stp_1")
     }
     expect(resumed.effects).toEqual([{ type: "EXECUTE_STEP", taskId: "tsk_1", stepId: "stp_1" }])
+  })
+
+  it("resume task with waiting root step loads details instead of executing", () => {
+    const main = linkedMainMenuState()
+    const selecting: InteractiveState = {
+      status: "selecting_task",
+      taskIds: ["tsk_1"],
+      shared: main.status === "main_menu" ? main.shared : ({} as never),
+    }
+
+    const resumed = transition(selecting, {
+      type: "TASK_SELECTED",
+      taskId: "tsk_1",
+      currentRootStepId: "stp_1",
+      currentRootStepStatus: "waiting",
+    })
+    expect(resumed.state.status).toBe("step_actions")
+    if (resumed.state.status === "step_actions") {
+      expect(resumed.state.rootStepStatus).toBe("waiting")
+      expect(resumed.state.shared.activeStepId).toBe("stp_1")
+    }
+    expect(resumed.effects).toEqual([{ type: "GET_STEP", taskId: "tsk_1", stepId: "stp_1" }])
+  })
+
+  it("back from waiting step actions returns to main menu", () => {
+    const main = linkedMainMenuState()
+    const stepActions: InteractiveState = {
+      status: "step_actions",
+      taskId: "tsk_1",
+      stepId: "stp_1",
+      rootStepStatus: "waiting",
+      shared: {
+        ...(main.status === "main_menu" ? main.shared : ({} as never)),
+        activeTaskId: "tsk_1",
+        activeStepId: "stp_1",
+      },
+    }
+
+    const back = transition(stepActions, { type: "USER_BACK" })
+    expect(back.state.status).toBe("main_menu")
+    expect(back.effects).toEqual([{ type: "PROMPT_MAIN_MENU" }])
+  })
+
+  it("attach action carries persisted session details into attach effect", () => {
+    const main = linkedMainMenuState()
+    const stepActions: InteractiveState = {
+      status: "step_actions",
+      taskId: "tsk_1",
+      stepId: "stp_1",
+      rootStepStatus: "blocked",
+      shared: {
+        ...(main.status === "main_menu" ? main.shared : ({} as never)),
+        activeTaskId: "tsk_1",
+        activeStepId: "stp_1",
+      },
+    }
+
+    const attach = transition(stepActions, {
+      type: "STEP_ACTION_ATTACH",
+      baseUrl: "http://127.0.0.1:1234",
+      sessionId: "ses_1",
+    })
+
+    expect(attach.effects).toEqual([
+      {
+        type: "ATTACH_OPENCODE",
+        projectRoot: "/tmp/project",
+        baseUrl: "http://127.0.0.1:1234",
+        sessionId: "ses_1",
+      },
+      { type: "GET_STEP", taskId: "tsk_1", stepId: "stp_1" },
+    ])
   })
 
   it("cancel exits from main menu", () => {

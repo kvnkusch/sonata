@@ -19,6 +19,7 @@
     "zod": "^4.1.8"
   },
   "devDependencies": {
+    "@typescript/native-preview": "catalog:",
     "vitest": "^4.0.18"
   }
 }

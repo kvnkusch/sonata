@@ -27,7 +27,7 @@ export const TaskListCommand = cmd<object, TaskListArgs>({
 
     for (const task of tasks) {
       UI.println(
-        `${task.taskId} ${task.workflowName} step_id=${task.currentStepId ?? "?"} step_index=${task.currentStepIndex ?? "?"}`,
+        `${task.taskId} ${task.workflowName} root_step_id=${task.currentRootStepId ?? "?"} root_step_status=${task.currentRootStepStatus ?? "?"}`,
       )
     }
   },

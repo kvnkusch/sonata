@@ -17,6 +17,8 @@ export type ArtifactCandidate = {
   stepId: string
   stepKey: string
   stepIndex: number
+  parentStepId: string | null
+  workKey: string | null
   writtenAt: number
 }
 
@@ -27,15 +29,7 @@ export function listArtifactCandidatesForBinding(input: {
   executor: DbExecutor
 }): ArtifactCandidate[] {
   return input.executor
-    .select({
-      artifactName: artifactTable.artifactName,
-      artifactKind: artifactTable.artifactKind,
-      relativePath: artifactTable.relativePath,
-      stepId: stepTable.stepId,
-      stepKey: stepTable.stepKey,
-      stepIndex: stepTable.stepIndex,
-      writtenAt: artifactTable.writtenAt,
-    })
+    .select()
     .from(artifactTable)
     .innerJoin(stepTable, eq(stepTable.stepId, artifactTable.stepId))
     .where(
@@ -47,7 +41,34 @@ export function listArtifactCandidatesForBinding(input: {
       ),
     )
     .orderBy(asc(stepTable.stepIndex), asc(artifactTable.writtenAt))
-    .all() as ArtifactCandidate[]
+    .all()
+    .map(({ artifact, step }) => ({
+      artifactName: artifact.artifactName,
+      artifactKind: artifact.artifactKind,
+      relativePath: artifact.relativePath,
+      stepId: step.stepId,
+      stepKey: step.stepKey,
+      stepIndex: step.stepIndex,
+      parentStepId: step.parentStepId,
+      workKey: step.workKey,
+      writtenAt: artifact.writtenAt,
+    }))
+}
+
+function assertNonRepeatedChildBinding(bindingName: string, fromStepKey: string, candidates: ArtifactCandidate[]) {
+  const workKeys = new Set(
+    candidates
+      .filter((candidate) => candidate.parentStepId !== null && candidate.workKey !== null)
+      .map((candidate) => candidate.workKey as string),
+  )
+
+  if (workKeys.size > 1) {
+    throw new RpcError(
+      ErrorCode.INVALID_INPUT,
+      409,
+      `Input ${bindingName} cannot bind directly to repeated child step ${fromStepKey}; use ctx.children.readArtifacts(...) fan-in instead`,
+    )
+  }
 }
 
 function validateIndices(indices: number[] | undefined): number[] {
@@ -130,6 +151,7 @@ export async function resolveStepInputs(input: {
       artifactName: binding.from.artifact,
       executor: input.executor,
     })
+    assertNonRepeatedChildBinding(binding.as, binding.from.step, rows)
 
     const selection = input.artifactSelections?.[binding.as] ?? {
       mode: binding.cardinality.mode === "single" ? "latest" : "all",

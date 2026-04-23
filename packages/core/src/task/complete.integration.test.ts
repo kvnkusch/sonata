@@ -3,7 +3,8 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { eq } from "drizzle-orm"
-import { closeDb, db, taskEventTable, taskTable } from "../db"
+import { closeDb, db, stepTable, taskEventTable, taskTable } from "../db"
+import { newStepId } from "../id"
 import { linkOpsRepo } from "../project"
 import { startStep } from "../step"
 import { completeTask, startTask } from "./index"
@@ -114,5 +115,110 @@ describe("task.complete integration", () => {
       .where(eq(taskEventTable.eventType, "task.completed"))
       .all()
     expect(completedEvents).toHaveLength(0)
+  })
+
+  for (const status of ["waiting", "blocked", "orphaned"] as const) {
+    it(`rejects completion when a root step is still ${status}`, async () => {
+      const sandbox = mkdtempSync(path.join(tmpdir(), `sonata-complete-task-root-${status}-`))
+      tempDirs.push(sandbox)
+
+      const projectRoot = path.join(sandbox, "project")
+      const opsRoot = path.join(sandbox, "ops")
+      mkdirSync(path.join(projectRoot, ".git"), { recursive: true })
+      mkdirSync(opsRoot, { recursive: true })
+      writeOpsWorkflowFiles(opsRoot)
+      process.env.SONATA_DB_PATH = path.join(sandbox, "db", "sonata.db")
+
+      const linked = db().transaction((tx) => {
+        return linkOpsRepo({ projectRoot, opsRoot, projectId: `prj_complete_root_${status}` }, tx)
+      })
+      const started = await startTask({ projectId: linked.projectId, workflowRef: { name: "default" } })
+      const rootStep = await startStep({ taskId: started.taskId, stepKey: "plan" })
+      db().update(stepTable).set({ status }).where(eq(stepTable.stepId, rootStep.stepId)).run()
+
+      expect(() => completeTask({ taskId: started.taskId })).toThrow(
+        `Cannot complete task=${started.taskId} while step=${rootStep.stepId} is ${status}`,
+      )
+    })
+
+    it(`rejects completion when a child step is still ${status}`, async () => {
+      const sandbox = mkdtempSync(path.join(tmpdir(), `sonata-complete-task-child-${status}-`))
+      tempDirs.push(sandbox)
+
+      const projectRoot = path.join(sandbox, "project")
+      const opsRoot = path.join(sandbox, "ops")
+      mkdirSync(path.join(projectRoot, ".git"), { recursive: true })
+      mkdirSync(opsRoot, { recursive: true })
+      writeOpsWorkflowFiles(opsRoot)
+      process.env.SONATA_DB_PATH = path.join(sandbox, "db", "sonata.db")
+
+      const linked = db().transaction((tx) => {
+        return linkOpsRepo({ projectRoot, opsRoot, projectId: `prj_complete_child_${status}` }, tx)
+      })
+      const started = await startTask({ projectId: linked.projectId, workflowRef: { name: "default" } })
+      const rootStep = await startStep({ taskId: started.taskId, stepKey: "plan" })
+      db().update(stepTable).set({ status: "completed" }).where(eq(stepTable.stepId, rootStep.stepId)).run()
+
+      const now = Date.now()
+      const childStepId = newStepId()
+      db()
+        .insert(stepTable)
+        .values({
+          stepId: childStepId,
+          taskId: started.taskId,
+          stepKey: "plan",
+          stepIndex: 2,
+          status,
+          parentStepId: rootStep.stepId,
+          workKey: `child-${status}`,
+          inputs: "{}",
+          startedAt: now,
+        })
+        .run()
+
+      expect(() => completeTask({ taskId: started.taskId })).toThrow(
+        `Cannot complete task=${started.taskId} while step=${childStepId} is ${status}`,
+      )
+    })
+  }
+
+  it("rejects completion when a child step is still active", async () => {
+    const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-complete-task-child-active-"))
+    tempDirs.push(sandbox)
+
+    const projectRoot = path.join(sandbox, "project")
+    const opsRoot = path.join(sandbox, "ops")
+    mkdirSync(path.join(projectRoot, ".git"), { recursive: true })
+    mkdirSync(opsRoot, { recursive: true })
+    writeOpsWorkflowFiles(opsRoot)
+    process.env.SONATA_DB_PATH = path.join(sandbox, "db", "sonata.db")
+
+    const linked = db().transaction((tx) => {
+      return linkOpsRepo({ projectRoot, opsRoot, projectId: "prj_complete_child_active" }, tx)
+    })
+    const started = await startTask({ projectId: linked.projectId, workflowRef: { name: "default" } })
+    const rootStep = await startStep({ taskId: started.taskId, stepKey: "plan" })
+    db().update(stepTable).set({ status: "completed" }).where(eq(stepTable.stepId, rootStep.stepId)).run()
+
+    const now = Date.now()
+    const childStepId = newStepId()
+    db()
+      .insert(stepTable)
+      .values({
+        stepId: childStepId,
+        taskId: started.taskId,
+        stepKey: "plan",
+        stepIndex: 2,
+        status: "active",
+        parentStepId: rootStep.stepId,
+        workKey: "child-active",
+        inputs: "{}",
+        startedAt: now,
+      })
+      .run()
+
+    expect(() => completeTask({ taskId: started.taskId })).toThrow(
+      `Cannot complete task=${started.taskId} while step=${childStepId} is active`,
+    )
   })
 })

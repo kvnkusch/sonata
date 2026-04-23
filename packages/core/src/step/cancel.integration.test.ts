@@ -3,11 +3,11 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { eq } from "drizzle-orm"
-import { closeDb, db, stepTable, taskEventTable, taskTable } from "../db"
+import { closeDb, db, stepTable } from "../db"
 import { executeStep } from "../execution"
 import { linkOpsRepo } from "../project"
 import { startTask } from "../task"
-import { failStep, startStep } from "./index"
+import { cancelStep, startStep } from "./index"
 
 const tempDirs: string[] = []
 
@@ -75,9 +75,9 @@ afterEach(() => {
   }
 })
 
-describe("step.fail integration", () => {
-  it("fails the step and keeps task active", async () => {
-    const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-fail-step-"))
+describe("step.cancel integration", () => {
+  it("cancels a waiting step and clears persisted wait state", async () => {
+    const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-cancel-waiting-step-"))
     tempDirs.push(sandbox)
 
     const projectRoot = path.join(sandbox, "project")
@@ -88,46 +88,7 @@ describe("step.fail integration", () => {
     process.env.SONATA_DB_PATH = path.join(sandbox, "db", "sonata.db")
 
     const linked = db().transaction((tx) => {
-      return linkOpsRepo({ projectRoot, opsRoot, projectId: "prj_fail_step" }, tx)
-    })
-    const started = await startTask({ projectId: linked.projectId, workflowRef: { name: "default" } })
-    const step = await startStep({ taskId: started.taskId, stepKey: "plan" })
-
-    const failed = failStep({
-      taskId: started.taskId,
-      stepId: step.stepId,
-      reason: "manual failure",
-    })
-
-    expect(failed.status).toBe("failed")
-
-    const stepRow = db().select().from(stepTable).where(eq(stepTable.stepId, step.stepId)).get()
-    expect(stepRow?.status).toBe("failed")
-
-    const taskRow = db().select().from(taskTable).where(eq(taskTable.taskId, started.taskId)).get()
-    expect(taskRow?.status).toBe("active")
-
-    const taskFailedEvents = db()
-      .select()
-      .from(taskEventTable)
-      .where(eq(taskEventTable.eventType, "task.failed"))
-      .all()
-    expect(taskFailedEvents).toHaveLength(0)
-  })
-
-  it("fails a waiting step and clears persisted wait state", async () => {
-    const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-fail-waiting-step-"))
-    tempDirs.push(sandbox)
-
-    const projectRoot = path.join(sandbox, "project")
-    const opsRoot = path.join(sandbox, "ops")
-    mkdirSync(path.join(projectRoot, ".git"), { recursive: true })
-    mkdirSync(opsRoot, { recursive: true })
-    writeOpsWorkflowFiles(opsRoot)
-    process.env.SONATA_DB_PATH = path.join(sandbox, "db", "sonata.db")
-
-    const linked = db().transaction((tx) => {
-      return linkOpsRepo({ projectRoot, opsRoot, projectId: "prj_fail_waiting_step" }, tx)
+      return linkOpsRepo({ projectRoot, opsRoot, projectId: "prj_cancel_waiting_step" }, tx)
     })
     const started = await startTask({ projectId: linked.projectId, workflowRef: { name: "default" } })
     const step = await startStep({ taskId: started.taskId, stepKey: "plan" })
@@ -142,22 +103,17 @@ describe("step.fail integration", () => {
       .where(eq(stepTable.stepId, step.stepId))
       .run()
 
-    const failed = failStep({
-      taskId: started.taskId,
-      stepId: step.stepId,
-      reason: "manual failure",
-    })
-
-    expect(failed.status).toBe("failed")
+    const cancelled = cancelStep({ taskId: started.taskId, stepId: step.stepId })
+    expect(cancelled.status).toBe("cancelled")
 
     const stepRow = db().select().from(stepTable).where(eq(stepTable.stepId, step.stepId)).get()
-    expect(stepRow?.status).toBe("failed")
+    expect(stepRow?.status).toBe("cancelled")
     expect(stepRow?.waitSpecJson).toBeNull()
     expect(stepRow?.waitSnapshotJson).toBeNull()
   })
 
-  it("rejects failing a root step while child steps are still open", async () => {
-    const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-fail-root-open-children-"))
+  it("rejects cancelling a root step while child steps are still open", async () => {
+    const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-cancel-root-open-children-"))
     tempDirs.push(sandbox)
 
     const projectRoot = path.join(sandbox, "project")
@@ -201,7 +157,7 @@ describe("step.fail integration", () => {
     process.env.SONATA_DB_PATH = path.join(sandbox, "db", "sonata.db")
 
     const linked = db().transaction((tx) => {
-      return linkOpsRepo({ projectRoot, opsRoot, projectId: "prj_fail_root_open_children" }, tx)
+      return linkOpsRepo({ projectRoot, opsRoot, projectId: "prj_cancel_root_open_children" }, tx)
     })
     const started = await startTask({ projectId: linked.projectId, workflowRef: { name: "default" } })
     const controller = await startStep({ taskId: started.taskId, stepKey: "controller" })
@@ -209,16 +165,16 @@ describe("step.fail integration", () => {
     const controllerResult = await executeStep({ taskId: started.taskId, stepId: controller.stepId })
     expect(controllerResult.status).toBe("waiting")
 
-    expect(() => failStep({ taskId: started.taskId, stepId: controller.stepId, reason: "manual failure" })).toThrow(
-      `Cannot fail root step ${controller.stepId} while child steps are still open`,
+    expect(() => cancelStep({ taskId: started.taskId, stepId: controller.stepId })).toThrow(
+      `Cannot cancel root step ${controller.stepId} while child steps are still open`,
     )
 
     const parentRow = db().select().from(stepTable).where(eq(stepTable.stepId, controller.stepId)).get()
     expect(parentRow?.status).toBe("waiting")
   })
 
-  it("wakes a waiting parent when a child fails via step.fail", async () => {
-    const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-fail-wakes-parent-"))
+  it("wakes a waiting parent when a child is cancelled via step.cancel", async () => {
+    const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-cancel-wakes-parent-"))
     tempDirs.push(sandbox)
 
     const projectRoot = path.join(sandbox, "project")
@@ -262,7 +218,7 @@ describe("step.fail integration", () => {
     process.env.SONATA_DB_PATH = path.join(sandbox, "db", "sonata.db")
 
     const linked = db().transaction((tx) => {
-      return linkOpsRepo({ projectRoot, opsRoot, projectId: "prj_fail_wakes_parent" }, tx)
+      return linkOpsRepo({ projectRoot, opsRoot, projectId: "prj_cancel_wakes_parent" }, tx)
     })
     const started = await startTask({ projectId: linked.projectId, workflowRef: { name: "default" } })
     const controller = await startStep({ taskId: started.taskId, stepKey: "controller" })
@@ -271,8 +227,8 @@ describe("step.fail integration", () => {
     expect(controllerResult.status).toBe("waiting")
 
     const child = db().select().from(stepTable).where(eq(stepTable.parentStepId, controller.stepId)).get()
-    const failed = failStep({ taskId: started.taskId, stepId: child!.stepId, reason: "manual failure" })
-    expect(failed.status).toBe("failed")
+    const cancelled = cancelStep({ taskId: started.taskId, stepId: child!.stepId })
+    expect(cancelled.status).toBe("cancelled")
 
     const parentRow = db().select().from(stepTable).where(eq(stepTable.stepId, controller.stepId)).get()
     expect(parentRow?.status).toBe("active")

@@ -8,6 +8,10 @@ export type SharedCtx = {
   lastError: string | null
 }
 
+export type OpenRootStepStatus = "active" | "waiting" | "blocked" | "orphaned"
+
+export type KnownStepStatus = OpenRootStepStatus | "pending" | "completed" | "failed" | "cancelled"
+
 export type InvocationInputs = {
   invocation?: unknown
   artifactSelections?: Record<string, { mode: "latest" | "all" | "indices"; indices?: number[] }>
@@ -22,7 +26,7 @@ export type InteractiveState =
   | { status: "collecting_inputs"; shared: SharedCtx; taskId: string; stepKey: string }
   | { status: "starting_step"; shared: SharedCtx; taskId: string; stepKey: string; inputs?: InvocationInputs }
   | { status: "executing_step"; shared: SharedCtx; taskId: string; stepId: string }
-  | { status: "step_actions"; shared: SharedCtx; taskId: string; stepId: string }
+  | { status: "step_actions"; shared: SharedCtx; taskId: string; stepId: string; rootStepStatus: OpenRootStepStatus }
   | { status: "task_continuation"; shared: SharedCtx; taskId: string }
   | { status: "exiting"; shared?: SharedCtx }
   | { status: "fatal_error"; message: string; shared?: SharedCtx }
@@ -39,7 +43,12 @@ export type InteractiveEvent =
   | { type: "USER_CANCEL" }
   | { type: "WORKFLOW_SELECTED"; workflowName: string }
   | { type: "TASKS_LOADED"; taskIds: string[] }
-  | { type: "TASK_SELECTED"; taskId: string; currentStepId?: string }
+  | {
+    type: "TASK_SELECTED"
+    taskId: string
+    currentRootStepId?: string
+    currentRootStepStatus?: OpenRootStepStatus
+  }
   | { type: "TASK_START_OK"; taskId: string }
   | { type: "TASK_START_FAILED"; message: string }
   | { type: "STEP_SELECTED"; stepKey: string }
@@ -51,7 +60,7 @@ export type InteractiveEvent =
   | {
     type: "STEP_EXECUTE_OK"
       result: {
-        status: "completed" | "blocked" | "failed"
+        status: "active" | "waiting" | "completed" | "blocked" | "failed"
         suggestedNextStepKey: string | null
         failure?: { reason: string; details?: unknown }
         opencodeSession?: { baseUrl: string; sessionId: string; reused: boolean }
@@ -59,10 +68,17 @@ export type InteractiveEvent =
   }
   | { type: "STEP_EXECUTE_FAILED"; message: string }
   | { type: "STEP_ACTION_RETRY" }
+  | { type: "STEP_ACTION_ATTACH"; baseUrl: string; sessionId: string }
+  | { type: "STEP_ACTION_INSPECT_CHILDREN" }
+  | { type: "STEP_ACTION_REFRESH" }
+  | { type: "STEP_ACTION_RESUME" }
+  | { type: "STEP_ACTION_RETRY_IN_NEW_SESSION" }
   | { type: "STEP_ACTION_FAIL" }
   | { type: "STEP_ACTION_CANCEL" }
   | { type: "STEP_ACTION_STATUS" }
-  | { type: "STEP_STILL_ACTIVE"; active: boolean }
+  | { type: "STEP_STATUS_LOADED"; status: KnownStepStatus }
+  | { type: "STEP_RESUME_OK"; status: "active" | "orphaned" }
+  | { type: "STEP_RETRY_OK" }
   | { type: "STEP_FAIL_OK" }
   | { type: "STEP_CANCEL_OK" }
   | { type: "STEP_ACTION_FAILED"; message: string }
@@ -73,7 +89,12 @@ export type InteractiveEvent =
   | { type: "TASK_COMPLETE_OK" }
   | { type: "TASK_DELETE_OK" }
   | { type: "TASK_ACTION_FAILED"; message: string }
-  | { type: "TASK_STILL_ACTIVE"; active: boolean }
+  | {
+    type: "TASK_STILL_ACTIVE"
+    active: boolean
+    currentRootStepId?: string
+    currentRootStepStatus?: OpenRootStepStatus
+  }
   | { type: "ERROR_ACK" }
 
 export type Effect =
@@ -89,12 +110,16 @@ export type Effect =
   | { type: "PROMPT_COLLECT_INPUTS"; taskId: string; stepKey: string }
   | { type: "START_STEP"; taskId: string; stepKey: string; inputs?: InvocationInputs }
   | { type: "EXECUTE_STEP"; taskId: string; stepId: string }
+  | { type: "GET_STEP"; taskId: string; stepId: string }
   | { type: "ATTACH_OPENCODE"; projectRoot: string; baseUrl: string; sessionId: string }
   | { type: "PRINT_STEP_RESULT" }
-  | { type: "PROMPT_STEP_ACTIONS" }
+  | { type: "PRINT_STEP_DETAILS" }
+  | { type: "PRINT_CHILD_STEPS" }
+  | { type: "PROMPT_STEP_ACTIONS"; rootStepStatus: OpenRootStepStatus }
+  | { type: "RESUME_BLOCKED_STEP"; taskId: string; stepId: string }
+  | { type: "RETRY_ORPHANED_STEP"; taskId: string; stepId: string }
   | { type: "FAIL_STEP"; taskId: string; stepId: string }
   | { type: "CANCEL_STEP"; taskId: string; stepId: string }
-  | { type: "CHECK_STEP_ACTIVE"; taskId: string; stepId: string }
   | { type: "CHECK_TASK_ACTIVE"; projectId: string; taskId: string }
   | { type: "PROMPT_TASK_CONTINUATION"; taskId: string }
   | { type: "COMPLETE_TASK"; taskId: string }
@@ -121,6 +146,20 @@ function stepSelectionTarget(shared: SharedCtx, taskId: string): TransitionResul
   return {
     state: { status: "selecting_step", shared, taskId },
     effects: [{ type: "PROMPT_SELECT_STEP", taskId }],
+  }
+}
+
+function taskContinuationTarget(shared: SharedCtx, taskId: string): TransitionResult {
+  return {
+    state: {
+      status: "task_continuation",
+      shared: {
+        ...shared,
+        activeStepId: null,
+      },
+      taskId,
+    },
+    effects: [{ type: "CHECK_TASK_ACTIVE", projectId: shared.projectId, taskId }],
   }
 }
 
@@ -214,20 +253,32 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
     case "selecting_task": {
       switch (event.type) {
         case "TASK_SELECTED":
-          if (event.currentStepId) {
+          if (event.currentRootStepId && event.currentRootStepStatus) {
             const shared = {
               ...state.shared,
               activeTaskId: event.taskId,
-              activeStepId: event.currentStepId,
+              activeStepId: event.currentRootStepId,
+            }
+            if (event.currentRootStepStatus === "active") {
+              return {
+                state: {
+                  status: "executing_step",
+                  shared,
+                  taskId: event.taskId,
+                  stepId: event.currentRootStepId,
+                },
+                effects: [{ type: "EXECUTE_STEP", taskId: event.taskId, stepId: event.currentRootStepId }],
+              }
             }
             return {
               state: {
-                status: "executing_step",
+                status: "step_actions",
                 shared,
                 taskId: event.taskId,
-                stepId: event.currentStepId,
+                stepId: event.currentRootStepId,
+                rootStepStatus: event.currentRootStepStatus,
               },
-              effects: [{ type: "EXECUTE_STEP", taskId: event.taskId, stepId: event.currentStepId }],
+              effects: [{ type: "GET_STEP", taskId: event.taskId, stepId: event.currentRootStepId }],
             }
           }
           return stepSelectionTarget(
@@ -342,7 +393,10 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
         case "STEP_EXECUTE_OK": {
           const shared: SharedCtx = {
             ...state.shared,
-            activeStepId: event.result.status === "blocked" ? state.stepId : null,
+            activeStepId:
+              event.result.status === "active" || event.result.status === "waiting" || event.result.status === "blocked"
+                ? state.stepId
+                : null,
             lastOpencodeSession: event.result.opencodeSession
               ? {
                   baseUrl: event.result.opencodeSession.baseUrl,
@@ -379,17 +433,10 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
           }
 
           if (event.result.status === "failed") {
+            const next = taskContinuationTarget(shared, state.taskId)
             return {
-              state: {
-                status: "task_continuation",
-                shared,
-                taskId: state.taskId,
-              },
-              effects: [
-                ...attachEffect,
-                { type: "PRINT_STEP_RESULT" },
-                { type: "CHECK_TASK_ACTIVE", projectId: shared.projectId, taskId: state.taskId },
-              ],
+              state: next.state,
+              effects: [...attachEffect, { type: "PRINT_STEP_RESULT" }, ...next.effects],
             }
           }
 
@@ -399,8 +446,15 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
               shared,
               taskId: state.taskId,
               stepId: state.stepId,
+              rootStepStatus: event.result.status,
             },
-            effects: [...attachEffect, { type: "PRINT_STEP_RESULT" }, { type: "CHECK_STEP_ACTIVE", taskId: state.taskId, stepId: state.stepId }],
+            effects: [
+              ...attachEffect,
+              { type: "PRINT_STEP_RESULT" },
+              ...(event.result.status === "active"
+                ? ([{ type: "PROMPT_STEP_ACTIONS", rootStepStatus: "active" }] as Effect[])
+                : ([{ type: "GET_STEP", taskId: state.taskId, stepId: state.stepId }] as Effect[])),
+            ],
           }
         }
         case "STEP_EXECUTE_FAILED":
@@ -410,8 +464,9 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
               shared: withError(state.shared, event.message),
               taskId: state.taskId,
               stepId: state.stepId,
+              rootStepStatus: "active",
             },
-            effects: [{ type: "PRINT_ERROR", message: event.message }, { type: "PROMPT_STEP_ACTIONS" }],
+            effects: [{ type: "PRINT_ERROR", message: event.message }, { type: "PROMPT_STEP_ACTIONS", rootStepStatus: "active" }],
           }
         default:
           return { state, effects: [] }
@@ -420,20 +475,86 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
 
     case "step_actions": {
       switch (event.type) {
-        case "STEP_STILL_ACTIVE":
-          if (event.active) {
-            return { state, effects: [{ type: "PROMPT_STEP_ACTIONS" }] }
+        case "STEP_STATUS_LOADED":
+          if (event.status === "pending") {
+            return {
+              state: {
+                ...state,
+                rootStepStatus: "active",
+                shared: {
+                  ...state.shared,
+                  activeStepId: state.stepId,
+                },
+              },
+              effects: [{ type: "PROMPT_STEP_ACTIONS", rootStepStatus: "active" }],
+            }
+          }
+          if (
+            event.status === "completed" ||
+            event.status === "failed" ||
+            event.status === "cancelled"
+          ) {
+            return taskContinuationTarget(state.shared, state.taskId)
           }
           return {
             state: {
-              status: "task_continuation",
+              ...state,
+              rootStepStatus: event.status,
               shared: {
                 ...state.shared,
-                activeStepId: null,
+                activeStepId: state.stepId,
               },
-              taskId: state.taskId,
             },
-            effects: [{ type: "CHECK_TASK_ACTIVE", projectId: state.shared.projectId, taskId: state.taskId }],
+            effects: [{ type: "PRINT_STEP_DETAILS" }, { type: "PROMPT_STEP_ACTIONS", rootStepStatus: event.status }],
+          }
+        case "STEP_ACTION_ATTACH":
+          return {
+            state,
+            effects: [
+              {
+                type: "ATTACH_OPENCODE",
+                projectRoot: state.shared.projectRoot,
+                baseUrl: event.baseUrl,
+                sessionId: event.sessionId,
+              },
+              { type: "GET_STEP", taskId: state.taskId, stepId: state.stepId },
+            ],
+          }
+        case "STEP_ACTION_REFRESH":
+          return {
+            state,
+            effects: [{ type: "GET_STEP", taskId: state.taskId, stepId: state.stepId }],
+          }
+        case "STEP_ACTION_INSPECT_CHILDREN":
+          return {
+            state,
+            effects: [{ type: "PRINT_CHILD_STEPS" }, { type: "PROMPT_STEP_ACTIONS", rootStepStatus: state.rootStepStatus }],
+          }
+        case "STEP_ACTION_RESUME":
+          return {
+            state,
+            effects: [{ type: "RESUME_BLOCKED_STEP", taskId: state.taskId, stepId: state.stepId }],
+          }
+        case "STEP_RESUME_OK":
+          if (event.status === "active") {
+            return {
+              state: { status: "executing_step", shared: state.shared, taskId: state.taskId, stepId: state.stepId },
+              effects: [{ type: "EXECUTE_STEP", taskId: state.taskId, stepId: state.stepId }],
+            }
+          }
+          return {
+            state: { ...state, rootStepStatus: "orphaned" },
+            effects: [{ type: "GET_STEP", taskId: state.taskId, stepId: state.stepId }],
+          }
+        case "STEP_ACTION_RETRY_IN_NEW_SESSION":
+          return {
+            state,
+            effects: [{ type: "RETRY_ORPHANED_STEP", taskId: state.taskId, stepId: state.stepId }],
+          }
+        case "STEP_RETRY_OK":
+          return {
+            state: { status: "executing_step", shared: state.shared, taskId: state.taskId, stepId: state.stepId },
+            effects: [{ type: "EXECUTE_STEP", taskId: state.taskId, stepId: state.stepId }],
           }
         case "STEP_ACTION_RETRY":
           return {
@@ -452,37 +573,26 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
           }
         case "STEP_FAIL_OK":
         case "STEP_CANCEL_OK": {
-          const shared = {
-            ...state.shared,
-            activeStepId: null,
-          }
-          return {
-            state: { status: "task_continuation", shared, taskId: state.taskId },
-            effects: [{ type: "CHECK_TASK_ACTIVE", projectId: shared.projectId, taskId: state.taskId }],
-          }
+          return taskContinuationTarget(state.shared, state.taskId)
         }
         case "STEP_ACTION_STATUS":
           return {
             state,
-            effects: [
-              { type: "PRINT_STATUS" },
-              { type: "CHECK_STEP_ACTIVE", taskId: state.taskId, stepId: state.stepId },
-            ],
+            effects: [{ type: "PRINT_STATUS" }, { type: "PROMPT_STEP_ACTIONS", rootStepStatus: state.rootStepStatus }],
           }
         case "USER_BACK":
         case "USER_CANCEL":
-          return {
-            state: {
-              status: "task_continuation",
-              shared: state.shared,
-              taskId: state.taskId,
-            },
-            effects: [{ type: "CHECK_TASK_ACTIVE", projectId: state.shared.projectId, taskId: state.taskId }],
+          if (state.rootStepStatus === "active") {
+            return taskContinuationTarget(state.shared, state.taskId)
           }
+          return { state: { status: "main_menu", shared: state.shared }, effects: [{ type: "PROMPT_MAIN_MENU" }] }
         case "STEP_ACTION_FAILED":
           return {
             state: { ...state, shared: withError(state.shared, event.message) },
-            effects: [{ type: "PRINT_ERROR", message: event.message }, { type: "PROMPT_STEP_ACTIONS" }],
+            effects: [
+              { type: "PRINT_ERROR", message: event.message },
+              { type: "PROMPT_STEP_ACTIONS", rootStepStatus: state.rootStepStatus },
+            ],
           }
         default:
           return { state, effects: [] }
@@ -495,6 +605,33 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
           if (!event.active) {
             return { state: { status: "main_menu", shared: state.shared }, effects: [{ type: "PROMPT_MAIN_MENU" }] }
           }
+
+          if (event.currentRootStepId && event.currentRootStepStatus) {
+            const shared: SharedCtx = {
+              ...state.shared,
+              activeTaskId: state.taskId,
+              activeStepId: event.currentRootStepId,
+            }
+
+            if (event.currentRootStepStatus === "active") {
+              return {
+                state: { status: "executing_step", shared, taskId: state.taskId, stepId: event.currentRootStepId },
+                effects: [{ type: "EXECUTE_STEP", taskId: state.taskId, stepId: event.currentRootStepId }],
+              }
+            }
+
+            return {
+              state: {
+                status: "step_actions",
+                shared,
+                taskId: state.taskId,
+                stepId: event.currentRootStepId,
+                rootStepStatus: event.currentRootStepStatus,
+              },
+              effects: [{ type: "GET_STEP", taskId: state.taskId, stepId: event.currentRootStepId }],
+            }
+          }
+
           return { state, effects: [{ type: "PROMPT_TASK_CONTINUATION", taskId: state.taskId }] }
         case "TASK_CONTINUE_START_NEXT_STEP":
           if (event.stepKey) {

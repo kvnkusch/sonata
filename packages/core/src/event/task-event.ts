@@ -1,10 +1,17 @@
 import { taskEventTable, type DbExecutor, db } from "../db"
 import { newEventId } from "../id"
+import { ErrorCode } from "../rpc/base"
+import type { JsonValue } from "../workflow/module"
 
 export const TaskEventType = {
   TASK_STARTED: "task.started",
   STEP_STARTED: "step.started",
   ARTIFACT_WRITTEN: "artifact.written",
+  STEP_WAITING: "step.waiting",
+  STEP_READY: "step.ready",
+  STEP_BLOCKED: "step.blocked",
+  STEP_RESUMED: "step.resumed",
+  STEP_ORPHANED: "step.orphaned",
   STEP_COMPLETION_REJECTED: "step.completion.rejected",
   STEP_COMPLETED: "step.completed",
   STEP_FAILED: "step.failed",
@@ -14,6 +21,20 @@ export const TaskEventType = {
 } as const
 
 export type TaskEventType = (typeof TaskEventType)[keyof typeof TaskEventType]
+
+export type StepCompletionRejectedPayload = {
+  stepId: string
+  reason: "missing_required_artifacts" | "can_complete_rejected"
+  code: typeof ErrorCode.REQUIRED_ARTIFACT_MISSING | typeof ErrorCode.STEP_COMPLETION_GUARD_REJECTED
+  message: string
+  details:
+    | { missingArtifacts: string[] }
+    | {
+        guardCode: string
+        guardMessage: string
+        guardDetails?: JsonValue
+      }
+}
 
 export function writeTaskEvent(input: {
   taskId: string

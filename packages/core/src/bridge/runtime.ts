@@ -1,5 +1,6 @@
-import { SONATA_COMPLETE_TOOL_NAME } from "../step/get-toolset"
+import { SONATA_BLOCK_TOOL_NAME, SONATA_COMPLETE_TOOL_NAME } from "../step/get-toolset"
 import { getStepToolset } from "../step/get-toolset"
+import { blockStep } from "../step/block"
 import { invokeStepTool } from "../step/invoke-tool"
 import { writeStepArtifact } from "../step/write-artifact"
 
@@ -72,6 +73,28 @@ export async function startupBridgeRuntime(input?: {
             manual: false,
           })
           return completion
+        },
+      }
+    }
+
+    if (tool.name === SONATA_BLOCK_TOOL_NAME) {
+      return {
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+        argsSchema: tool.argsSchema,
+        invoke: async (args, options) => {
+          return blockStep({
+            taskId: runtimeEnv.taskId,
+            stepId: runtimeEnv.stepId,
+            blockPayload: args as {
+              code: string
+              message: string
+              details?: unknown
+              resumeHint?: string
+            },
+            sessionId: options?.sessionId,
+          })
         },
       }
     }

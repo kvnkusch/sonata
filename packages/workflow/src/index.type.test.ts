@@ -1,10 +1,14 @@
 import { expectTypeOf, test } from "vitest"
 import { z } from "zod"
 import {
+  type ChildArtifactRef,
+  type ChildSummary,
+  type CompletionGuardResult,
   defineStep,
   defineWorkflow,
   openCodeConfig,
   openCodeTool,
+  type WaitSpec,
   type WorkflowStepImplementations,
 } from "./index"
 
@@ -60,6 +64,11 @@ const plan = defineStep({
       },
     ] as const,
   },
+})
+
+const controller = defineStep({
+  id: "controller",
+  title: "Controller",
 })
 
 const implement = defineStep({
@@ -146,7 +155,7 @@ const workflowBuilder = defineWorkflow({
   id: "default",
   version: "0.1.0",
   name: "Type Test",
-  steps: [intake, notes, plan, implement] as const,
+  steps: [intake, notes, plan, controller, implement] as const,
 })
 
 const implementations: WorkflowStepImplementations<typeof workflowBuilder.steps> = {
@@ -183,6 +192,52 @@ const implementations: WorkflowStepImplementations<typeof workflowBuilder.steps>
     },
     async on() {},
   },
+  controller: {
+    async run(ctx) {
+      expectTypeOf(ctx.opsRoot).toEqualTypeOf<string>()
+
+      const child = await ctx.children.spawn({
+        stepKey: "implement",
+        workKey: "job-1",
+        invocation: { strictness: "high" },
+      })
+      expectTypeOf(child.existing).toEqualTypeOf<boolean>()
+
+      const children = await ctx.children.list({ stepKey: "implement", workKeys: ["job-1"] })
+      expectTypeOf(children[0]).toEqualTypeOf<{
+        stepId: string
+        stepKey: string
+        workKey: string | null
+        status: string
+      } | undefined>()
+
+      const summary = await ctx.children.summary({ stepKey: "implement" })
+      expectTypeOf(summary).toEqualTypeOf<ChildSummary>()
+
+      const artifacts = await ctx.children.readArtifacts({
+        stepKey: "implement",
+        artifactName: "implementation_notes",
+      })
+      expectTypeOf(artifacts[0]).toEqualTypeOf<ChildArtifactRef | undefined>()
+    },
+    async on() {},
+    waitFor(ctx) {
+      expectTypeOf(ctx.opsRoot).toEqualTypeOf<string>()
+      return {
+        kind: "children",
+        childStepKey: "implement",
+        until: "all_completed",
+        label: ctx.opsRoot,
+      } satisfies WaitSpec
+    },
+    canComplete(ctx) {
+      expectTypeOf(ctx.children.summary).toEqualTypeOf<(params: {
+        stepKey: string
+        workKeys?: string[]
+      }) => Promise<ChildSummary>>()
+      return { ok: true } satisfies CompletionGuardResult
+    },
+  },
   implement: {
     async run(ctx) {
       await ctx.opencode.start({ title: "Implement", prompt: "Ship it" })
@@ -200,10 +255,33 @@ const implementations: WorkflowStepImplementations<typeof workflowBuilder.steps>
       await ctx.writeJsonArtifact({ slug: "config", data: { mode: "fast", retries: 3 } })
     },
     async on() {},
+    canComplete() {
+      return { ok: false, code: "blocked", message: "waiting on review" }
+    },
   },
 }
 
 const moduleResult = workflowBuilder.implement(implementations)
+
+const _invalidWaitForImplementation: WorkflowStepImplementations<typeof workflowBuilder.steps>["controller"] = {
+  async run() {},
+  async on() {},
+  // @ts-expect-error waitFor must return WaitSpec or null
+  waitFor() {
+    return { kind: "children", childStepKey: "implement", until: "sometimes" }
+  },
+}
+void _invalidWaitForImplementation
+
+const _invalidCanCompleteImplementation: WorkflowStepImplementations<typeof workflowBuilder.steps>["controller"] = {
+  async run() {},
+  async on() {},
+  // @ts-expect-error rejected completion results require a message
+  canComplete() {
+    return { ok: false, code: "missing-message" }
+  },
+}
+void _invalidCanCompleteImplementation
 
 const legacyModule = defineWorkflow({
   apiVersion: 1,
@@ -216,6 +294,7 @@ const legacyModule = defineWorkflow({
       title: "Legacy",
       async run(ctx) {
         expectTypeOf(ctx.inputs.invocation).toEqualTypeOf<undefined>()
+        expectTypeOf(ctx.opsRoot).toEqualTypeOf<string>()
         await ctx.completeStep()
       },
       async on() {},

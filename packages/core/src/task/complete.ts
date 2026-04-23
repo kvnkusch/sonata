@@ -1,7 +1,8 @@
-import { and, eq } from "drizzle-orm"
+import { and, eq, inArray } from "drizzle-orm"
 import { db, stepTable, taskTable, type DbExecutor } from "../db"
 import { TaskEventType, writeTaskEvent } from "../event/task-event"
 import { ErrorCode, RpcError } from "../rpc/base"
+import { openStepStatuses } from "../step/transitions"
 
 export type CompleteTaskInput = {
   taskId: string
@@ -17,16 +18,16 @@ export function completeTask(input: CompleteTaskInput, executor: DbExecutor = db
     throw new RpcError(ErrorCode.INVALID_STEP_TRANSITION, 409, `Cannot complete task=${input.taskId} from current state`)
   }
 
-  const activeStep = executor
-    .select({ stepId: stepTable.stepId })
+  const openStep = executor
+    .select()
     .from(stepTable)
-    .where(and(eq(stepTable.taskId, input.taskId), eq(stepTable.status, "active")))
+    .where(and(eq(stepTable.taskId, input.taskId), inArray(stepTable.status, openStepStatuses)))
     .get()
-  if (activeStep) {
+  if (openStep) {
     throw new RpcError(
       ErrorCode.INVALID_STEP_TRANSITION,
       409,
-      `Cannot complete task=${input.taskId} while step=${activeStep.stepId} is active`,
+      `Cannot complete task=${input.taskId} while step=${openStep.stepId} is ${openStep.status}`,
     )
   }
 

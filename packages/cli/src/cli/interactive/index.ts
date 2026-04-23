@@ -63,10 +63,11 @@ export async function runInteractive() {
     sharedCtx: null as SharedCtx | null,
     listedTasks: new Map<string, ActiveTask>(),
     lastStepResult: null as {
-      status: "completed" | "blocked" | "failed"
+      status: "active" | "waiting" | "completed" | "blocked" | "failed"
       suggestedNextStepKey: string | null
       failure?: { reason: string; details?: unknown }
     } | null,
+    lastStepDetail: null as ReturnType<ReturnType<typeof createCaller>["step"]["get"]> | null,
   }
 
   const runEffect = createEffectRunner({

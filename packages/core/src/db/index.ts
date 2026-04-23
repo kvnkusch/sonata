@@ -26,6 +26,8 @@ type SonataDb = BunSQLiteDatabase<typeof schema> | BetterSQLite3Database<typeof 
 export type DbExecutor = SonataDb
 export type DbTx = Parameters<Parameters<DbExecutor["transaction"]>[0]>[0]
 type SqliteConnection = BunDatabase | BetterSqlite3.Database
+type BunSqliteModule = { Database: typeof import("bun:sqlite").Database }
+type BetterSqliteModule = { default: new (location: string) => BetterSqlite3.Database }
 
 const state: {
   sqlite?: SqliteConnection
@@ -45,12 +47,13 @@ export function db(): SonataDb {
   mkdirSync(path.dirname(location), { recursive: true })
 
   const sqlite = isBunRuntime
-    ? new sqliteModule.Database(location, { create: true })
-    : new sqliteModule.default(location)
-  sqlite.run("PRAGMA journal_mode = WAL")
-  sqlite.run("PRAGMA synchronous = NORMAL")
-  sqlite.run("PRAGMA busy_timeout = 5000")
-  sqlite.run("PRAGMA foreign_keys = ON")
+    ? new (sqliteModule as unknown as BunSqliteModule).Database(location, { create: true })
+    : new (sqliteModule as unknown as BetterSqliteModule).default(location)
+  const sqliteWithRun = sqlite as { run: (statement: string) => unknown }
+  sqliteWithRun.run("PRAGMA journal_mode = WAL")
+  sqliteWithRun.run("PRAGMA synchronous = NORMAL")
+  sqliteWithRun.run("PRAGMA busy_timeout = 5000")
+  sqliteWithRun.run("PRAGMA foreign_keys = ON")
 
   const client = isBunRuntime
     ? (bunDrizzleModule!.drizzle({ client: sqlite as BunDatabase, schema }) as SonataDb)

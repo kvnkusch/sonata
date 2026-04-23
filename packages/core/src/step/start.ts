@@ -1,10 +1,11 @@
-import { and, desc, eq } from "drizzle-orm"
+import { and, desc, eq, inArray, isNull } from "drizzle-orm"
 import { db, stepTable, taskTable, type DbExecutor } from "../db"
 import { TaskEventType, writeTaskEvent } from "../event/task-event"
 import { newStepId } from "../id"
 import { ErrorCode, RpcError } from "../rpc/base"
 import { loadWorkflowForTask } from "../workflow/loader"
 import { resolveStepInputs, type ArtifactSelectionOverride } from "./inputs"
+import { openStepStatuses } from "./transitions"
 
 export type StartStepInput = {
   taskId: string
@@ -27,17 +28,19 @@ export async function startStep(input: StartStepInput, executor: DbExecutor = db
     )
   }
 
-  const activeStep = executor
+  const openRootStep = executor
     .select()
     .from(stepTable)
-    .where(and(eq(stepTable.taskId, input.taskId), eq(stepTable.status, "active")))
+    .where(
+      and(eq(stepTable.taskId, input.taskId), isNull(stepTable.parentStepId), inArray(stepTable.status, openStepStatuses)),
+    )
     .get()
 
-  if (activeStep) {
+  if (openRootStep) {
     throw new RpcError(
       ErrorCode.INVALID_STEP_TRANSITION,
       409,
-      `Task already has an active step: ${activeStep.stepId}`,
+      `Task already has an open root step: ${openRootStep.stepId}`,
     )
   }
 
@@ -52,7 +55,7 @@ export async function startStep(input: StartStepInput, executor: DbExecutor = db
   }
 
   const lastStep = executor
-    .select({ stepIndex: stepTable.stepIndex })
+    .select()
     .from(stepTable)
     .where(eq(stepTable.taskId, input.taskId))
     .orderBy(desc(stepTable.stepIndex))
@@ -78,6 +81,8 @@ export async function startStep(input: StartStepInput, executor: DbExecutor = db
       stepKey: workflowStep.id,
       stepIndex: nextStepIndex,
       status: "active",
+      parentStepId: null,
+      workKey: null,
       inputs: JSON.stringify(resolvedInputs),
       startedAt: now,
     })

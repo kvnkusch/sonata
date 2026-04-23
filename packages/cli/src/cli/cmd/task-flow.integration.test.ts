@@ -101,8 +101,8 @@ describe("task flow cli integration", () => {
     const listed = runCli(["task", "list", "--project-id", "prj_flow"], env)
     expect(listed.exitCode).toBe(0)
     const listOutput = Buffer.from(listed.stderr).toString("utf8")
-    expect(listOutput).toContain(`step_id=${stepId}`)
-    expect(listOutput).toContain("step_index=1")
+    expect(listOutput).toContain(`root_step_id=${stepId}`)
+    expect(listOutput).toContain("root_step_status=active")
 
     const runtime = await startupBridgeRuntime({
       env: {

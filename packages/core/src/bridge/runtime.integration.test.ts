@@ -3,9 +3,11 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { z } from "zod"
-import { artifactTable, closeDb, db, taskTable } from "../db"
+import { artifactTable, closeDb, db, stepTable, taskTable } from "../db"
+import { executeStep } from "../execution"
 import { linkOpsRepo } from "../project"
-import { startStep } from "../step"
+import { ErrorCode } from "../rpc/base"
+import { resumeBlockedStep, startStep } from "../step"
 import { startTask } from "../task"
 import { BridgeRuntimeEnvError, startupBridgeRuntime } from "./runtime"
 
@@ -76,7 +78,7 @@ afterEach(() => {
 })
 
 describe("bridge runtime integration", () => {
-  it("validates required env, declares dynamic tools, and executes write + custom + complete", async () => {
+  it("validates required env, declares dynamic tools, and executes write + custom + block", async () => {
     const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-bridge-runtime-"))
     tempDirs.push(sandbox)
 
@@ -110,17 +112,26 @@ describe("bridge runtime integration", () => {
 
     const artifactTool = runtime.tools.find((tool) => tool.name === "sonata_write_ticket_summary_artifact_markdown")
     const customTool = runtime.tools.find((tool) => tool.name === "sonata_step_plan__custom_echo")
+    const blockTool = runtime.tools.find((tool) => tool.name === "sonata_block_step")
     const completeTool = runtime.tools.find((tool) => tool.name === "sonata_complete_step")
 
     expect(artifactTool).toBeDefined()
     expect(customTool).toBeDefined()
+    expect(blockTool).toBeDefined()
     expect(completeTool).toBeDefined()
 
     await artifactTool?.invoke({ markdown: "Bridge write" }, { sessionId: "session-bridge" })
     const customResult = await customTool?.invoke({ text: "hello" }, { sessionId: "session-bridge" })
     expect(customResult).toEqual({ echoed: "hello" })
-    const completion = await completeTool?.invoke({}, { sessionId: "session-bridge" })
-    expect(completion).toMatchObject({ status: "completed" })
+    const blocked = await blockTool?.invoke(
+      {
+        code: "awaiting_input",
+        message: "Need user selection before continuing",
+        details: { field: "target" },
+      },
+      { sessionId: "session-bridge" },
+    )
+    expect(blocked).toMatchObject({ status: "blocked" })
 
     const artifacts = db()
       .select()
@@ -129,6 +140,14 @@ describe("bridge runtime integration", () => {
       .filter((artifact) => artifact.taskId === started.taskId)
     expect(artifacts).toHaveLength(1)
     expect(artifacts[0]?.sessionId).toBe("session-bridge")
+
+    const stepRow = db().select().from(stepTable).all().find((row) => row.stepId === step.stepId)
+    expect(stepRow?.status).toBe("blocked")
+    expect(JSON.parse(stepRow?.blockPayloadJson ?? "null")).toEqual({
+      code: "awaiting_input",
+      message: "Need user selection before continuing",
+      details: { field: "target" },
+    })
 
     const taskRow = db()
       .select()
@@ -224,5 +243,176 @@ describe("bridge runtime integration", () => {
       "opencode.complete:session-hooks",
       "step.completed",
     ])
+  })
+
+  it("returns guard rejection details cleanly to the bridge caller", async () => {
+    const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-bridge-runtime-guard-"))
+    tempDirs.push(sandbox)
+
+    const projectRoot = path.join(sandbox, "project")
+    const opsRoot = path.join(sandbox, "ops")
+    mkdirSync(path.join(projectRoot, ".git"), { recursive: true })
+    mkdirSync(opsRoot, { recursive: true })
+    writeOpsWorkflowFilesFromSource(
+      opsRoot,
+      `export default {
+  apiVersion: 1,
+  id: "default",
+  version: "0.1.0",
+  name: "Default",
+  steps: [
+    {
+      id: "plan",
+      title: "Plan",
+      opencode: {},
+      canComplete() {
+        return { ok: false, code: "review_required", message: "Review required", details: { lane: "ops" } }
+      },
+      async run() {},
+      async on() {},
+    },
+  ],
+}
+`,
+    )
+
+    process.env.SONATA_DB_PATH = path.join(sandbox, "db", "sonata.db")
+
+    const linked = db().transaction((tx) => {
+      return linkOpsRepo({ projectRoot, opsRoot, projectId: "prj_bridge_guard" }, tx)
+    })
+    const started = await startTask({
+      projectId: linked.projectId,
+      workflowRef: { name: "default" },
+    })
+    const step = await startStep({ taskId: started.taskId, stepKey: "plan" })
+
+    const runtime = await startupBridgeRuntime({
+      env: {
+        SONATA_TASK_ID: started.taskId,
+        SONATA_STEP_ID: step.stepId,
+        SONATA_PROJECT_ROOT: projectRoot,
+        SONATA_OPS_ROOT: opsRoot,
+      },
+    })
+
+    const completeTool = runtime.tools.find((tool) => tool.name === "sonata_complete_step")
+    expect(completeTool).toBeDefined()
+
+    await expect(completeTool!.invoke({}, { sessionId: "session-guard" })).rejects.toMatchObject({
+      code: ErrorCode.STEP_COMPLETION_GUARD_REJECTED,
+      status: 409,
+      message: "Review required",
+      details: {
+        stepId: step.stepId,
+        reason: "can_complete_rejected",
+        code: ErrorCode.STEP_COMPLETION_GUARD_REJECTED,
+        message: "Review required",
+        details: {
+          guardCode: "review_required",
+          guardMessage: "Review required",
+          guardDetails: { lane: "ops" },
+        },
+      },
+    })
+  })
+
+  it("blocks, resumes, and later completes an OpenCode step end to end", async () => {
+    const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-bridge-runtime-block-resume-"))
+    tempDirs.push(sandbox)
+
+    const projectRoot = path.join(sandbox, "project")
+    const opsRoot = path.join(sandbox, "ops")
+    mkdirSync(path.join(projectRoot, ".git"), { recursive: true })
+    mkdirSync(opsRoot, { recursive: true })
+    writeOpsWorkflowFilesFromSource(
+      opsRoot,
+      `export default {
+  apiVersion: 1,
+  id: "default",
+  version: "0.1.0",
+  name: "Default",
+  steps: [
+    {
+      id: "plan",
+      title: "Plan",
+      next: "ship",
+      opencode: {},
+      async run(ctx) {
+        await ctx.opencode.start({ prompt: "Continue the existing session until complete" })
+      },
+      async on() {},
+    },
+    {
+      id: "ship",
+      title: "Ship",
+      async run() {},
+      async on() {},
+    },
+  ],
+}
+`,
+    )
+
+    process.env.SONATA_DB_PATH = path.join(sandbox, "db", "sonata.db")
+
+    const linked = db().transaction((tx) => {
+      return linkOpsRepo({ projectRoot, opsRoot, projectId: "prj_bridge_block_resume" }, tx)
+    })
+    const started = await startTask({ projectId: linked.projectId, workflowRef: { name: "default" } })
+    const step = await startStep({ taskId: started.taskId, stepKey: "plan" })
+
+    const firstRun = await executeStep({ taskId: started.taskId, stepId: step.stepId })
+    const sessionId = firstRun.opencode?.sessionId ?? null
+    expect(firstRun).toMatchObject({
+      status: "active",
+      opencode: {
+        sessionId: expect.any(String),
+        baseUrl: expect.any(String),
+      },
+    })
+    const currentStepRow = db().select().from(stepTable).all().find((row) => row.stepId === step.stepId)
+    expect(sessionId).not.toBeNull()
+    expect(currentStepRow?.sessionId).toBe(sessionId)
+
+    const runtime = await startupBridgeRuntime({
+      env: {
+        SONATA_TASK_ID: started.taskId,
+        SONATA_STEP_ID: step.stepId,
+        SONATA_PROJECT_ROOT: projectRoot,
+        SONATA_OPS_ROOT: opsRoot,
+      },
+    })
+
+    const blockTool = runtime.tools.find((tool) => tool.name === "sonata_block_step")
+    const completeTool = runtime.tools.find((tool) => tool.name === "sonata_complete_step")
+    expect(blockTool).toBeDefined()
+    expect(completeTool).toBeDefined()
+
+    const blocked = await blockTool!.invoke(
+      {
+        code: "awaiting_operator",
+        message: "Need the operator to continue",
+      },
+      { sessionId: sessionId! },
+    )
+    expect(blocked).toMatchObject({ status: "blocked" })
+
+    await expect(resumeBlockedStep({ taskId: started.taskId, stepId: step.stepId })).resolves.toEqual({
+      taskId: started.taskId,
+      stepId: step.stepId,
+      status: "active",
+      sessionId: sessionId!,
+    })
+
+    await expect(completeTool!.invoke({}, { sessionId: sessionId! })).resolves.toEqual({
+      status: "completed",
+      suggestedNextStepKey: "ship",
+    })
+
+    await firstRun.opencode?.close?.()
+
+    const stepRow = db().select().from(stepTable).all().find((row) => row.stepId === step.stepId)
+    expect(stepRow?.status).toBe("completed")
   })
 })

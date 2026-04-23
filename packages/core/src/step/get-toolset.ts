@@ -11,6 +11,7 @@ function isZodSchema(value: unknown): value is z.ZodTypeAny {
 }
 
 export const SONATA_COMPLETE_TOOL_NAME = "sonata_complete_step"
+export const SONATA_BLOCK_TOOL_NAME = "sonata_block_step"
 
 function toNormalizedToolName(value: string): string {
   return value
@@ -61,6 +62,13 @@ type CompleteToolDeclaration = {
   argsSchema: Record<string, unknown>
 }
 
+type BlockToolDeclaration = {
+  name: typeof SONATA_BLOCK_TOOL_NAME
+  description: string
+  inputSchema: Record<string, unknown>
+  argsSchema: Record<string, unknown>
+}
+
 type CustomToolDeclaration = {
   name: string
   description: string
@@ -69,7 +77,11 @@ type CustomToolDeclaration = {
   argsSchema: Record<string, unknown>
 }
 
-export type StepToolDeclaration = WriteArtifactToolDeclaration | CompleteToolDeclaration | CustomToolDeclaration
+export type StepToolDeclaration =
+  | WriteArtifactToolDeclaration
+  | BlockToolDeclaration
+  | CompleteToolDeclaration
+  | CustomToolDeclaration
 
 function customToolInputSchema(tool: { argsSchema: Record<string, unknown> }): Record<string, unknown> {
   return zodToStrictJsonSchema(z.object(tool.argsSchema as z.ZodRawShape).strict())
@@ -148,6 +160,7 @@ export async function getStepToolset(
 
   const reservedNames = new Set<string>([
     ...writeTools.map((tool) => tool.name),
+    SONATA_BLOCK_TOOL_NAME,
     SONATA_COMPLETE_TOOL_NAME,
   ])
 
@@ -185,6 +198,28 @@ export async function getStepToolset(
     }
   })
 
+  const blockTool: BlockToolDeclaration = {
+    name: SONATA_BLOCK_TOOL_NAME,
+    description: "Block current Sonata step until external input is available",
+    inputSchema: {
+      type: "object",
+      properties: {
+        code: { type: "string", minLength: 1 },
+        message: { type: "string", minLength: 1 },
+        details: {},
+        resumeHint: { type: "string", minLength: 1 },
+      },
+      required: ["code", "message"],
+      additionalProperties: false,
+    },
+    argsSchema: {
+      code: z.string().min(1),
+      message: z.string().min(1),
+      details: z.unknown().optional(),
+      resumeHint: z.string().min(1).optional(),
+    },
+  }
+
   const completeTool: CompleteToolDeclaration = {
     name: SONATA_COMPLETE_TOOL_NAME,
     description: "Complete current Sonata step",
@@ -208,6 +243,11 @@ export async function getStepToolset(
       cardinality: input.cardinality,
     })),
     artifacts,
-    tools: [...writeTools, ...customToolDeclarations, completeTool] as StepToolDeclaration[],
+    tools: [
+      ...writeTools,
+      ...customToolDeclarations,
+      ...(workflowStep.opencode ? [blockTool] : []),
+      completeTool,
+    ] as StepToolDeclaration[],
   }
 }

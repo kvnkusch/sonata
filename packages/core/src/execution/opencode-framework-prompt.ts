@@ -25,6 +25,7 @@ export function composeOpenCodeKickoffPrompt(input: {
     "Completion contract:",
     "- Use Sonata bridge tools for step artifact writes.",
     "- Use the provided frozen step inputs; do not assume unstated context.",
+    "- If the step cannot proceed autonomously and needs operator or external input, call `sonata_block_step` once with a structured reason.",
     "- After required artifacts are written, call `sonata_complete_step` exactly once.",
     "- Do not claim the step is complete unless `sonata_complete_step` succeeds.",
     requiredArtifacts.length > 0
