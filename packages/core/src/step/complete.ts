@@ -6,6 +6,7 @@ import { TaskEventType, type StepCompletionRejectedPayload, writeTaskEvent } fro
 import { ErrorCode, RpcError } from "../rpc/base"
 import { completeTask } from "../task"
 import { loadWorkflowForTask } from "../workflow"
+import { createStepLogContext } from "../logging"
 import type {
   JsonValue,
   StepContextBase,
@@ -140,6 +141,10 @@ export function createStepContextBase(input: {
   executor?: DbExecutor
 }): StepContextBase {
   const executor = input.executor ?? db()
+  const currentStep = executor.select().from(stepTable).where(eq(stepTable.stepId, input.stepId)).get()
+  if (!currentStep || currentStep.taskId !== input.taskId) {
+    throw new RpcError(ErrorCode.STEP_NOT_FOUND, 404, `Step not found: ${input.stepId}`)
+  }
 
   return {
     repoRoot: input.projectRoot,
@@ -147,6 +152,14 @@ export function createStepContextBase(input: {
     taskId: input.taskId,
     stepId: input.stepId,
     inputs: input.inputs,
+    log: createStepLogContext({
+      opsRootRealpath: input.opsRoot,
+      taskId: input.taskId,
+      stepId: input.stepId,
+      stepKey: currentStep.stepKey,
+      stepIndex: currentStep.stepIndex,
+      workKey: currentStep.workKey,
+    }),
     children: {
       spawn: async (params) => {
         const currentStep = executor.select().from(stepTable).where(eq(stepTable.stepId, input.stepId)).get()

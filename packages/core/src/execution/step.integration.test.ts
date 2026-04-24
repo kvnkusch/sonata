@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm"
 import { z } from "zod"
 import { artifactTable, closeDb, db, stepTable } from "../db"
 import { executeStep } from "../execution"
+import { stepLogPath, taskWorkflowLogPath } from "../logging"
 import { linkOpsRepo } from "../project"
 import { getStep } from "../step/get"
 import { completeStep, startStep, writeStepArtifact } from "../step"
@@ -54,6 +55,65 @@ function setupSandbox(name: string, workflowSource: string) {
 }
 
 describe("execution.step integration", () => {
+  it("writes workflow log streams to ops logs", async () => {
+    const { linked, opsRoot } = setupSandbox(
+      "logs",
+      `export default {
+  apiVersion: 1,
+  id: "default",
+  version: "0.1.0",
+  name: "Default",
+  steps: [
+    {
+      id: "plan",
+      title: "Plan",
+      async run(ctx) {
+        ctx.log.info("preparing plan", { phase: "plan", count: 1 })
+        await ctx.completeStep({ logged: true })
+      },
+      async on() {},
+    },
+  ],
+}
+`,
+    )
+
+    const task = await startTask({ projectId: linked.projectId })
+    const step = await startStep({ taskId: task.taskId, stepKey: "plan" })
+    const result = await executeStep({ taskId: task.taskId, stepId: step.stepId })
+
+    expect(result.status).toBe("completed")
+
+    const workflowRecords = readFileSync(
+      taskWorkflowLogPath({ opsRootRealpath: opsRoot, taskId: task.taskId }),
+      "utf8",
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { message: string; level: string; details?: { phase?: string; count?: number } })
+
+    expect(workflowRecords).toContainEqual(
+      expect.objectContaining({
+        stream: "workflow",
+        level: "info",
+        message: "preparing plan",
+        details: { phase: "plan", count: 1 },
+      }),
+    )
+
+    const stepLog = readFileSync(
+      stepLogPath({
+        opsRootRealpath: opsRoot,
+        taskId: task.taskId,
+        stepId: step.stepId,
+        stepKey: "plan",
+        stepIndex: 1,
+      }),
+      "utf8",
+    )
+    expect(stepLog).toContain('"message":"preparing plan"')
+  })
+
   it("exposes frozen start-time inputs as ctx.inputs", async () => {
     const { linked } = setupSandbox(
       "inputs",

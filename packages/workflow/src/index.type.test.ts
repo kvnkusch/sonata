@@ -6,6 +6,7 @@ import {
   type CompletionGuardResult,
   defineStep,
   defineWorkflow,
+  type JsonValue,
   openCodeConfig,
   openCodeTool,
   type WaitSpec,
@@ -162,6 +163,7 @@ const implementations: WorkflowStepImplementations<typeof workflowBuilder.steps>
   intake: {
     async run(ctx) {
       expectTypeOf(ctx.inputs.invocation).toEqualTypeOf<undefined>()
+      expectTypeOf(ctx.log.info).toEqualTypeOf<(message: string, details?: JsonValue) => void>()
       // @ts-expect-error non-opencode step context does not expose opencode tools
       void ctx.opencode.tools
       await ctx.completeStep({ ok: true })

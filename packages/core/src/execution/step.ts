@@ -234,6 +234,15 @@ export async function executeStep(
                   sessionId: current.sessionId,
                   reused: true,
                 }
+                try {
+                  await ctxRef!.log.info("opencode session reused", {
+                    baseUrl: current.opencodeBaseUrl,
+                    sessionId: current.sessionId,
+                    title: params.title ?? `Sonata ${workflowStep.title}`,
+                  })
+                } catch {
+                  // Workflow logs should not prevent session reuse.
+                }
                 await (workflowStep as WorkflowStepWithOpenCode).on(ctxRef! as never, {
                   type: "opencode.started",
                   sessionId: current.sessionId,
@@ -307,6 +316,15 @@ export async function executeStep(
               sessionId,
               reused: false,
               close: server.close,
+            }
+            try {
+              await ctxRef!.log.info("opencode session started", {
+                baseUrl: server.url,
+                sessionId,
+                title: params.title ?? `Sonata ${workflowStep.title}`,
+              })
+            } catch {
+              // Workflow logs should not prevent session startup.
             }
             await (workflowStep as WorkflowStepWithOpenCode).on(ctxRef! as never, {
               type: "opencode.started",

@@ -151,6 +151,22 @@ export type StepChildrenContext = {
   readArtifacts: (params: { stepKey: string; artifactName: string; workKeys?: string[] }) => Promise<ChildArtifactRef[]>
 }
 
+export type StepLogLevel = "debug" | "info" | "warn" | "error"
+
+export type StepLogInput = {
+  level?: StepLogLevel
+  message: string
+  details?: JsonValue
+}
+
+export type StepLogContext = {
+  write: (input: StepLogInput) => void
+  debug: (message: string, details?: JsonValue) => void
+  info: (message: string, details?: JsonValue) => void
+  warn: (message: string, details?: JsonValue) => void
+  error: (message: string, details?: JsonValue) => void
+}
+
 export const stepResult = {
   completed(input?: { completionPayload?: unknown }): StepRunComplete {
     return {
@@ -314,6 +330,7 @@ export type OpenCodeToolContext = {
   taskId: string
   stepId: string
   sessionId?: string
+  log: StepLogContext
 }
 
 type OpenCodeToolArgs<TArgsSchema extends Record<string, any>> = {
@@ -364,6 +381,7 @@ export type StepContextBase<
   taskId: string
   stepId: string
   inputs: TInputs
+  log: StepLogContext
   children: StepChildrenContext
   writeMarkdownArtifact: (params: {
     slug: TMarkdownSlug

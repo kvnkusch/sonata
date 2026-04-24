@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm"
 import z from "zod"
 import { db, projectTable, stepTable, taskTable, type DbExecutor } from "../db"
+import { createStepLogContext } from "../logging"
 import { ErrorCode, RpcError } from "../rpc/base"
 import { loadWorkflowStepForTask } from "../workflow/loader"
 
@@ -83,6 +84,14 @@ export async function invokeStepTool(input: InvokeStepToolInput, executor: DbExe
       taskId: input.taskId,
       stepId: input.stepId,
       sessionId: input.sessionId,
+      log: createStepLogContext({
+        opsRootRealpath: project.opsRootRealpath,
+        taskId: input.taskId,
+        stepId: input.stepId,
+        stepKey: step.stepKey,
+        stepIndex: step.stepIndex,
+        workKey: step.workKey,
+      }),
     },
     parsedArgs,
   )
