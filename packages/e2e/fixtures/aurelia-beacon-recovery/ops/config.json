@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "defaultWorkflowId": "default",
+  "workflowModules": [
+    {
+      "id": "default",
+      "path": "./workflows/default.ts"
+    }
+  ]
+}

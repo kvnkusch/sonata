@@ -52,12 +52,26 @@
         "typescript": "catalog:",
       },
     },
+    "packages/e2e": {
+      "name": "@sonata/e2e",
+      "dependencies": {
+        "@sonata/core": "workspace:*",
+        "@sonata/workflow": "workspace:*",
+      },
+      "devDependencies": {
+        "@tsconfig/bun": "catalog:",
+        "@types/bun": "catalog:",
+        "@typescript/native-preview": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "packages/workflow": {
       "name": "@sonata/workflow",
       "dependencies": {
         "zod": "^4.1.8",
       },
       "devDependencies": {
+        "@typescript/native-preview": "catalog:",
         "vitest": "^4.0.18",
       },
     },
@@ -199,6 +213,8 @@
     "@sonata/cli": ["@sonata/cli@workspace:packages/cli"],
 
     "@sonata/core": ["@sonata/core@workspace:packages/core"],
+
+    "@sonata/e2e": ["@sonata/e2e@workspace:packages/e2e"],
 
     "@sonata/workflow": ["@sonata/workflow@workspace:packages/workflow"],
 

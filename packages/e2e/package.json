@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@sonata/e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsgo --noEmit",
+    "lint": "bunx --yes oxlint --deny-warnings --tsconfig ../../tsconfig.json .",
+    "lint:fix": "bunx --yes oxlint --fix --tsconfig ../../tsconfig.json .",
+    "format": "bunx --yes oxfmt .",
+    "format:check": "bunx --yes oxfmt --check ."
+  },
+  "dependencies": {
+    "@sonata/core": "workspace:*",
+    "@sonata/workflow": "workspace:*"
+  },
+  "devDependencies": {
+    "@tsconfig/bun": "catalog:",
+    "@types/bun": "catalog:",
+    "@typescript/native-preview": "catalog:",
+    "typescript": "catalog:"
+  }
+}

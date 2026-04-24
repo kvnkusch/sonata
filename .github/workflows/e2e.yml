@@ -1,0 +1,34 @@
+name: E2E
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  scenario-fixtures:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck e2e package
+        run: bun --cwd packages/e2e run typecheck
+
+      - name: Lint e2e package
+        run: bun --cwd packages/e2e run lint
+
+      - name: Check e2e package formatting
+        run: bun --cwd packages/e2e run format:check
+
+      - name: Run e2e scenarios
+        run: bun turbo test --filter=@sonata/e2e
