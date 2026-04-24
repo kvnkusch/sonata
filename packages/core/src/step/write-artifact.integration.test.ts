@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { eq } from "drizzle-orm"
@@ -99,7 +99,7 @@ describe("step.writeArtifact integration", () => {
       stepId: initial.stepId,
       artifactName: "plan_structured",
       artifactKind: "json",
-      payload: { data: { bullets: ["a", "b"] } },
+      payload: { source: "inline", data: { bullets: ["a", "b"] } },
       sessionId: "session-a",
     })
 
@@ -222,5 +222,122 @@ describe("step.writeArtifact integration", () => {
 
     const rows = db().select().from(artifactTable).all()
     expect(rows.map((row) => row.taskId).sort()).toEqual([taskA.taskId, taskB.taskId].sort())
+  })
+
+  it("imports staged json artifacts and cleans them up after success", async () => {
+    const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-write-artifact-"))
+    tempDirs.push(sandbox)
+
+    const projectRoot = path.join(sandbox, "project")
+    const opsRoot = path.join(sandbox, "ops")
+    mkdirSync(path.join(projectRoot, ".git"), { recursive: true })
+    mkdirSync(opsRoot, { recursive: true })
+    writeOpsWorkflowFiles(opsRoot)
+
+    process.env.SONATA_DB_PATH = path.join(sandbox, "db", "sonata.db")
+
+    const linked = db().transaction((tx) => {
+      return linkOpsRepo({ projectRoot, opsRoot, projectId: "prj_write_from_file" }, tx)
+    })
+
+    const started = await startTask({
+      projectId: linked.projectId,
+      workflowRef: { name: "default" },
+    })
+    const initial = await startStep({ taskId: started.taskId, stepKey: "plan" })
+
+    const stagingDir = path.join(opsRoot, ".sonata", "staging", started.taskId, initial.stepId)
+    mkdirSync(stagingDir, { recursive: true })
+    const stagedPath = path.join(stagingDir, "plan-structured.json")
+    writeFileSync(stagedPath, JSON.stringify({ bullets: ["from", "file"] }), "utf8")
+
+    const result = await writeStepArtifact({
+      taskId: started.taskId,
+      stepId: initial.stepId,
+      artifactName: "plan_structured",
+      artifactKind: "json",
+      payload: { source: "file", filePath: stagedPath },
+      sessionId: "session-file",
+    })
+
+    expect(readFileSync(path.join(opsRoot, result.relativePath), "utf8")).toContain('"from"')
+    expect(existsSync(stagedPath)).toBe(false)
+  })
+
+  it("rejects staged json imports outside the step staging directory", async () => {
+    const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-write-artifact-"))
+    tempDirs.push(sandbox)
+
+    const projectRoot = path.join(sandbox, "project")
+    const opsRoot = path.join(sandbox, "ops")
+    mkdirSync(path.join(projectRoot, ".git"), { recursive: true })
+    mkdirSync(opsRoot, { recursive: true })
+    writeOpsWorkflowFiles(opsRoot)
+
+    process.env.SONATA_DB_PATH = path.join(sandbox, "db", "sonata.db")
+
+    const linked = db().transaction((tx) => {
+      return linkOpsRepo({ projectRoot, opsRoot, projectId: "prj_write_from_file_reject" }, tx)
+    })
+
+    const started = await startTask({
+      projectId: linked.projectId,
+      workflowRef: { name: "default" },
+    })
+    const initial = await startStep({ taskId: started.taskId, stepKey: "plan" })
+
+    const escapedPath = path.join(opsRoot, ".sonata", "staging", started.taskId, "other-step", "plan-structured.json")
+    mkdirSync(path.dirname(escapedPath), { recursive: true })
+    writeFileSync(escapedPath, JSON.stringify({ bullets: ["nope"] }), "utf8")
+
+    await expect(
+      writeStepArtifact({
+        taskId: started.taskId,
+        stepId: initial.stepId,
+        artifactName: "plan_structured",
+        artifactKind: "json",
+        payload: { source: "file", filePath: escapedPath },
+      }),
+    ).rejects.toMatchObject({
+      code: ErrorCode.INVALID_INPUT,
+      message: expect.stringContaining("Artifact import path must be inside"),
+    })
+    expect(existsSync(escapedPath)).toBe(true)
+  })
+
+  it("rejects invalid json payload variants with RpcError", async () => {
+    const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-write-artifact-"))
+    tempDirs.push(sandbox)
+
+    const projectRoot = path.join(sandbox, "project")
+    const opsRoot = path.join(sandbox, "ops")
+    mkdirSync(path.join(projectRoot, ".git"), { recursive: true })
+    mkdirSync(opsRoot, { recursive: true })
+    writeOpsWorkflowFiles(opsRoot)
+
+    process.env.SONATA_DB_PATH = path.join(sandbox, "db", "sonata.db")
+
+    const linked = db().transaction((tx) => {
+      return linkOpsRepo({ projectRoot, opsRoot, projectId: "prj_write_invalid_json_payload" }, tx)
+    })
+
+    const started = await startTask({
+      projectId: linked.projectId,
+      workflowRef: { name: "default" },
+    })
+    const initial = await startStep({ taskId: started.taskId, stepKey: "plan" })
+
+    await expect(
+      writeStepArtifact({
+        taskId: started.taskId,
+        stepId: initial.stepId,
+        artifactName: "plan_structured",
+        artifactKind: "json",
+        payload: { source: "file", data: { nope: true } } as never,
+      }),
+    ).rejects.toMatchObject({
+      code: ErrorCode.INVALID_INPUT,
+      message: expect.stringContaining("filePath"),
+    })
   })
 })

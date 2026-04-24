@@ -228,7 +228,7 @@ export function createStepContextBase(input: {
           stepId: input.stepId,
           slug: params.slug,
           kind: "json",
-          payload: { data: params.data },
+          payload: { source: "inline", data: params.data },
         },
         executor,
       )

@@ -200,6 +200,34 @@ export default {
       "sonata_write_ticket_summary_artifact_markdown",
       "sonata_complete_step",
     ])
+    const jsonTool = toolsetA.tools.find((tool) => tool.name === "sonata_write_plan_structured_artifact_json")
+    expect(jsonTool?.inputSchema).toEqual({
+      $schema: "http://json-schema.org/draft-07/schema#",
+      anyOf: [
+        {
+          type: "object",
+          properties: {
+            source: { type: "string", const: "inline" },
+            data: {},
+          },
+          required: ["source", "data"],
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          properties: {
+            source: { type: "string", const: "file" },
+            filePath: {
+              type: "string",
+              minLength: 1,
+              description: "Path under opsRoot/.sonata/staging/<taskId>/<stepId>/ containing the JSON payload to import",
+            },
+          },
+          required: ["source", "filePath"],
+          additionalProperties: false,
+        },
+      ],
+    })
   })
 
   it("fails fast when custom tool names normalize to collisions", async () => {

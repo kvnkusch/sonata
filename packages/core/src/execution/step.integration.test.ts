@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { eq } from "drizzle-orm"
 import { z } from "zod"
-import { closeDb, db, stepTable } from "../db"
+import { artifactTable, closeDb, db, stepTable } from "../db"
 import { executeStep } from "../execution"
 import { linkOpsRepo } from "../project"
 import { getStep } from "../step/get"
@@ -203,7 +203,7 @@ describe("execution.step integration", () => {
       stepId: intake.stepId,
       artifactName: "config",
       artifactKind: "json",
-      payload: { data: { mode: "fast", retries: 3 } },
+      payload: { source: "inline", data: { mode: "fast", retries: 3 } },
     })
     await completeStep({ taskId: task.taskId, stepId: intake.stepId })
 
@@ -214,6 +214,57 @@ describe("execution.step integration", () => {
 
     const result = await executeStep({ taskId: task.taskId, stepId: plan.stepId })
     expect(result.status).toBe("completed")
+  })
+
+  it("supports inline json artifact writes from ctx.writeJsonArtifact", async () => {
+    const { linked, opsRoot } = setupSandbox(
+      "json-inline-write",
+      `export default {
+  apiVersion: 1,
+  id: "default",
+  version: "0.1.0",
+  name: "Default",
+  steps: [
+    {
+      id: "plan",
+      title: "Plan",
+      artifacts: [
+        {
+          name: "plan_structured",
+          kind: "json",
+          required: true,
+          once: true,
+          schema: {
+            parse(input) {
+              return input
+            },
+          },
+        },
+      ],
+      async run(ctx) {
+        await ctx.writeJsonArtifact({ slug: "plan_structured", data: { bullets: ["inline"] } })
+        await ctx.completeStep({ ok: true })
+      },
+      async on() {},
+    },
+  ],
+}
+`,
+    )
+
+    const task = await startTask({ projectId: linked.projectId })
+    const step = await startStep({ taskId: task.taskId, stepKey: "plan" })
+
+    const result = await executeStep({ taskId: task.taskId, stepId: step.stepId })
+    expect(result.status).toBe("completed")
+
+    const artifact = db()
+      .select()
+      .from(artifactTable)
+      .all()
+      .find((row) => row.taskId === task.taskId && row.stepId === step.stepId && row.artifactName === "plan_structured")
+    expect(artifact).toBeDefined()
+    expect(readFileSync(path.join(opsRoot, artifact!.relativePath), "utf8")).toContain('"inline"')
   })
 
   it("auto-completes when run returns completed result", async () => {

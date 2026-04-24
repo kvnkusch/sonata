@@ -2,7 +2,7 @@ import { SONATA_BLOCK_TOOL_NAME, SONATA_COMPLETE_TOOL_NAME } from "../step/get-t
 import { getStepToolset } from "../step/get-toolset"
 import { blockStep } from "../step/block"
 import { invokeStepTool } from "../step/invoke-tool"
-import { writeStepArtifact } from "../step/write-artifact"
+import { writeStepArtifact, type WriteArtifactInput } from "../step/write-artifact"
 
 export class BridgeRuntimeEnvError extends Error {
   constructor(readonly envVar: string) {
@@ -133,7 +133,7 @@ export async function startupBridgeRuntime(input?: {
           stepId: runtimeEnv.stepId,
           artifactName: tool.artifactName,
           artifactKind: tool.artifactKind,
-          payload: args as { markdown: string } | { data: unknown },
+          payload: args as WriteArtifactInput["payload"],
           sessionId: options?.sessionId,
         })
       },

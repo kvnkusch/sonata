@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto"
-import { mkdirSync, renameSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { and, eq } from "drizzle-orm"
-import z from "zod"
 import { artifactAbsolutePath, artifactRelativePath } from "../artifact/path"
 import {
   artifactTable,
@@ -17,9 +16,116 @@ import { newArtifactId } from "../id"
 import { ErrorCode, RpcError } from "../rpc/base"
 import { getDeclaredArtifact } from "./validation"
 import { loadWorkflowStepForTask } from "../workflow/loader"
+import {
+  jsonArtifactPayloadSchema,
+  markdownArtifactPayloadSchema,
+  type JsonArtifactPayload,
+  type WriteArtifactPayload,
+} from "./artifact-args"
 
-const markdownPayloadSchema = z.object({ markdown: z.string().min(1) }).strict()
-const jsonPayloadSchema = z.object({ data: z.unknown() }).strict()
+function canonicalPath(targetPath: string): string {
+  try {
+    return realpathSync(targetPath)
+  } catch {
+    return path.resolve(targetPath)
+  }
+}
+
+function artifactImportStagingRoot(input: { opsRootRealpath: string; taskId: string; stepId: string }) {
+  return path.join(input.opsRootRealpath, ".sonata", "staging", input.taskId, input.stepId)
+}
+
+function resolveStagedImportPath(input: {
+  opsRootRealpath: string
+  taskId: string
+  stepId: string
+  filePath: string
+}): string {
+  const stagingRoot = canonicalPath(artifactImportStagingRoot(input))
+  const unresolvedPath = path.isAbsolute(input.filePath)
+    ? path.resolve(input.filePath)
+    : path.resolve(input.opsRootRealpath, input.filePath)
+  const resolvedPath = canonicalPath(unresolvedPath)
+  const stagingRootWithSep = stagingRoot.endsWith(path.sep) ? stagingRoot : `${stagingRoot}${path.sep}`
+  if (resolvedPath !== stagingRoot && !resolvedPath.startsWith(stagingRootWithSep)) {
+    throw new RpcError(
+      ErrorCode.INVALID_INPUT,
+      400,
+      `Artifact import path must be inside ${stagingRoot}: ${input.filePath}`,
+    )
+  }
+  return resolvedPath
+}
+
+function cleanupImportedStagedFile(input: { opsRootRealpath: string; taskId: string; stepId: string; filePath: string }) {
+  const stagingRoot = artifactImportStagingRoot(input)
+  const resolvedPath = resolveStagedImportPath(input)
+  rmSync(resolvedPath, { force: true })
+
+  let currentDir = path.dirname(resolvedPath)
+  while (currentDir.startsWith(stagingRoot)) {
+    try {
+      rmSync(currentDir)
+    } catch {
+      break
+    }
+    if (currentDir === stagingRoot) {
+      break
+    }
+    currentDir = path.dirname(currentDir)
+  }
+}
+
+function loadJsonArtifactContent(input: {
+  opsRootRealpath: string
+  taskId: string
+  stepId: string
+  payload: unknown
+  parse: (input: unknown) => unknown
+}): { content: string; importedFilePath?: string } {
+  let payload: JsonArtifactPayload
+  try {
+    payload = jsonArtifactPayloadSchema().parse(input.payload)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid JSON artifact payload"
+    throw new RpcError(ErrorCode.INVALID_INPUT, 400, message)
+  }
+
+  const parseJsonContent = (value: unknown) => {
+    try {
+      return `${JSON.stringify(input.parse(value), null, 2)}\n`
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid JSON artifact payload"
+      throw new RpcError(ErrorCode.INVALID_INPUT, 400, message)
+    }
+  }
+
+  if (payload.source === "file") {
+    const importedFilePath = resolveStagedImportPath({
+      opsRootRealpath: input.opsRootRealpath,
+      taskId: input.taskId,
+      stepId: input.stepId,
+      filePath: payload.filePath,
+    })
+
+    let parsedJson: unknown
+    try {
+      parsedJson = JSON.parse(readFileSync(importedFilePath, "utf8"))
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new RpcError(ErrorCode.INVALID_INPUT, 400, `Invalid JSON artifact import file: ${message}`)
+    }
+
+    return {
+      content: parseJsonContent(parsedJson),
+      importedFilePath,
+    }
+  }
+
+  return {
+    content: parseJsonContent(payload.data),
+  }
+}
 
 function writeAtomicFile(targetPath: string, content: string) {
   const dir = path.dirname(targetPath)
@@ -43,7 +149,7 @@ export type WriteArtifactInput = {
   stepId: string
   artifactName: string
   artifactKind: "markdown" | "json"
-  payload: { markdown: string } | { data: unknown }
+  payload: WriteArtifactPayload
   sessionId?: string
 }
 
@@ -52,7 +158,7 @@ export type WriteArtifactFromExecutionContextInput = {
   stepId: string
   slug: string
   kind: "markdown" | "json"
-  payload: { markdown: string } | { data: unknown }
+  payload: WriteArtifactPayload
   sessionId?: string
 }
 
@@ -135,16 +241,22 @@ export async function writeStepArtifact(input: WriteArtifactInput, executor: DbE
     )
     .get()
 
+  const jsonPayload =
+    input.artifactKind === "json"
+      ? loadJsonArtifactContent({
+          opsRootRealpath: project.opsRootRealpath,
+          taskId: input.taskId,
+          stepId: input.stepId,
+          payload: input.payload,
+          parse: (value) =>
+            declaredArtifact.kind === "json" ? declaredArtifact.schema.parse(value) : value,
+        })
+      : null
+
   const content =
     input.artifactKind === "markdown"
-      ? `${markdownPayloadSchema.parse(input.payload).markdown}\n`
-      : `${JSON.stringify(
-          declaredArtifact.kind === "json"
-            ? declaredArtifact.schema.parse(jsonPayloadSchema.parse(input.payload).data)
-            : jsonPayloadSchema.parse(input.payload).data,
-          null,
-          2,
-        )}\n`
+      ? `${markdownArtifactPayloadSchema.parse(input.payload).markdown}\n`
+      : jsonPayload!.content
 
   const relativePath = artifactRelativePath({
     taskId: input.taskId,
@@ -165,8 +277,21 @@ export async function writeStepArtifact(input: WriteArtifactInput, executor: DbE
   const now = Date.now()
   const hash = contentHash(content)
 
+  const cleanupImportedFile = () => {
+    if (!jsonPayload?.importedFilePath) {
+      return
+    }
+    cleanupImportedStagedFile({
+      opsRootRealpath: project.opsRootRealpath,
+      taskId: input.taskId,
+      stepId: input.stepId,
+      filePath: jsonPayload.importedFilePath,
+    })
+  }
+
   if (declaredArtifact.once !== false && existingArtifact) {
     if (existingArtifact.artifactKind === input.artifactKind && existingArtifact.contentHash === hash) {
+      cleanupImportedFile()
       return {
         taskId: input.taskId,
         stepId: input.stepId,
@@ -186,6 +311,7 @@ export async function writeStepArtifact(input: WriteArtifactInput, executor: DbE
   }
 
   if (existingArtifact && existingArtifact.artifactKind === input.artifactKind && existingArtifact.contentHash === hash) {
+    cleanupImportedFile()
     return {
       taskId: input.taskId,
       stepId: input.stepId,
@@ -252,6 +378,7 @@ export async function writeStepArtifact(input: WriteArtifactInput, executor: DbE
       }
 
       if (concurrentArtifact.artifactKind === input.artifactKind && concurrentArtifact.contentHash === hash) {
+        cleanupImportedFile()
         return {
           taskId: input.taskId,
           stepId: input.stepId,
@@ -287,6 +414,7 @@ export async function writeStepArtifact(input: WriteArtifactInput, executor: DbE
   }
 
   if (!wroteArtifact) {
+    cleanupImportedFile()
     return {
       taskId: input.taskId,
       stepId: input.stepId,
@@ -313,6 +441,8 @@ export async function writeStepArtifact(input: WriteArtifactInput, executor: DbE
     },
     createdAt: now,
   })
+
+  cleanupImportedFile()
 
   return {
     taskId: input.taskId,

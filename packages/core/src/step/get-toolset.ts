@@ -5,6 +5,12 @@ import { RpcError, ErrorCode } from "../rpc/base"
 import { loadWorkflowStepForTask } from "../workflow/loader"
 import type { OpenCodeTools, WorkflowStepArtifact } from "../workflow/module"
 import { zodToStrictJsonSchema } from "../workflow/json-schema"
+import {
+  jsonArtifactArgsShape,
+  jsonArtifactPayloadSchema,
+  markdownArtifactArgsShape,
+  markdownArtifactPayloadSchema,
+} from "./artifact-args"
 
 function isZodSchema(value: unknown): value is z.ZodTypeAny {
   return typeof value === "object" && value !== null && "_zod" in value && "parse" in value
@@ -89,24 +95,14 @@ function customToolInputSchema(tool: { argsSchema: Record<string, unknown> }): R
 
 function artifactInputSchema(artifact: WorkflowStepArtifact): Record<string, unknown> {
   if (artifact.kind === "markdown") {
-    return {
-      type: "object",
-      properties: {
-        markdown: { type: "string", minLength: 1 },
-      },
-      required: ["markdown"],
-      additionalProperties: false,
-    }
+    return zodToStrictJsonSchema(markdownArtifactPayloadSchema)
   }
 
-  return {
-    type: "object",
-    properties: {
-      data: isZodSchema(artifact.schema) ? zodToStrictJsonSchema(artifact.schema) : {},
-    },
-    required: ["data"],
-    additionalProperties: false,
-  }
+  return zodToStrictJsonSchema(
+    jsonArtifactPayloadSchema({
+      dataSchema: isZodSchema(artifact.schema) ? artifact.schema : undefined,
+    }),
+  )
 }
 
 export async function getStepToolset(
@@ -153,8 +149,10 @@ export async function getStepToolset(
       inputSchema: artifactInputSchema(artifact),
       argsSchema:
         artifact.kind === "markdown"
-          ? { markdown: z.string().min(1) }
-          : { data: z.unknown() },
+          ? markdownArtifactArgsShape
+          : jsonArtifactArgsShape({
+              dataSchema: isZodSchema(artifact.schema) ? artifact.schema : undefined,
+            }),
     }
   })
 

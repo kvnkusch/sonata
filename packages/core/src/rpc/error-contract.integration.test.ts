@@ -23,7 +23,10 @@ function writeOpsWorkflowFiles(opsRoot: string) {
     {
       id: "plan",
       title: "Plan",
-      artifacts: [{ name: "ticket_summary", kind: "markdown", required: true, once: true }],
+      artifacts: [
+        { name: "ticket_summary", kind: "markdown", required: true, once: true },
+        { name: "plan_structured", kind: "json", once: false, schema: { parse: (value) => value } },
+      ],
       async run() {},
       async on() {},
     },
@@ -115,6 +118,20 @@ describe("rpc error contract", () => {
       code: ErrorCode.INVALID_INPUT,
       status: 400,
       message: expect.stringContaining("Custom OpenCode tool is not declared"),
+    })
+
+    await expect(
+      caller.step.writeArtifact({
+        taskId: started.taskId,
+        stepId: initial.stepId,
+        artifactName: "plan_structured",
+        artifactKind: "json",
+        payload: { source: "file", data: { nope: true } } as never,
+      }),
+    ).rejects.toMatchObject({
+      code: ErrorCode.INVALID_INPUT,
+      status: 400,
+      message: expect.stringContaining("filePath"),
     })
 
     await caller.step.writeArtifact({

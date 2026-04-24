@@ -1,4 +1,8 @@
 import z from "zod"
+import {
+  jsonArtifactPayloadSchema,
+  markdownArtifactPayloadSchema,
+} from "../step/artifact-args"
 
 export const ErrorCode = {
   PROJECT_NOT_LINKED: "PROJECT_NOT_LINKED",
@@ -99,14 +103,25 @@ export const StepListInputArtifactsInput = z.object({
   stepKey: z.string().min(1),
 })
 
-export const StepWriteArtifactInput = z.object({
+const StepWriteArtifactBase = {
   taskId: z.string().min(1),
   stepId: z.string().min(1),
   artifactName: z.string().min(1),
-  artifactKind: z.enum(["markdown", "json"]),
-  payload: z.union([z.object({ markdown: z.string().min(1) }), z.object({ data: z.unknown() })]),
   sessionId: z.string().min(1).optional(),
-})
+} satisfies z.ZodRawShape
+
+export const StepWriteArtifactInput = z.discriminatedUnion("artifactKind", [
+  z.object({
+    ...StepWriteArtifactBase,
+    artifactKind: z.literal("markdown"),
+    payload: markdownArtifactPayloadSchema,
+  }).strict(),
+  z.object({
+    ...StepWriteArtifactBase,
+    artifactKind: z.literal("json"),
+    payload: jsonArtifactPayloadSchema(),
+  }).strict(),
+])
 
 export const StepInvokeToolInput = z.object({
   taskId: z.string().min(1),

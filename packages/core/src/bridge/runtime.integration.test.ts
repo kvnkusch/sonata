@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test"
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { z } from "zod"
@@ -243,6 +243,78 @@ describe("bridge runtime integration", () => {
       "opencode.complete:session-hooks",
       "step.completed",
     ])
+  })
+
+  it("imports staged json artifact files through the runtime bridge", async () => {
+    const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-bridge-runtime-json-"))
+    tempDirs.push(sandbox)
+
+    const projectRoot = path.join(sandbox, "project")
+    const opsRoot = path.join(sandbox, "ops")
+    mkdirSync(path.join(projectRoot, ".git"), { recursive: true })
+    mkdirSync(opsRoot, { recursive: true })
+    writeOpsWorkflowFilesFromSource(
+      opsRoot,
+      `export default {
+  apiVersion: 1,
+  id: "default",
+  version: "0.1.0",
+  name: "Default",
+  steps: [
+    {
+      id: "plan",
+      title: "Plan",
+      artifacts: [{ name: "plan_structured", kind: "json", required: true, once: true, schema: { parse: (value) => value } }],
+      async run() {},
+      async on() {},
+    },
+  ],
+}
+`,
+    )
+
+    process.env.SONATA_DB_PATH = path.join(sandbox, "db", "sonata.db")
+
+    const linked = db().transaction((tx) => {
+      return linkOpsRepo({ projectRoot, opsRoot, projectId: "prj_bridge_json" }, tx)
+    })
+    const started = await startTask({
+      projectId: linked.projectId,
+      workflowRef: { name: "default" },
+    })
+    const step = await startStep({ taskId: started.taskId, stepKey: "plan" })
+
+    const stagingDir = path.join(opsRoot, ".sonata", "staging", started.taskId, step.stepId)
+    mkdirSync(stagingDir, { recursive: true })
+    const stagedPath = path.join(stagingDir, "plan-structured.json")
+    writeFileSync(stagedPath, JSON.stringify({ bullets: ["bridge"] }), "utf8")
+
+    const runtime = await startupBridgeRuntime({
+      env: {
+        SONATA_TASK_ID: started.taskId,
+        SONATA_STEP_ID: step.stepId,
+        SONATA_PROJECT_ROOT: projectRoot,
+        SONATA_OPS_ROOT: opsRoot,
+      },
+    })
+
+    const artifactTool = runtime.tools.find((tool) => tool.name === "sonata_write_plan_structured_artifact_json")
+    expect(artifactTool).toBeDefined()
+
+    const written = await artifactTool?.invoke(
+      { source: "file", filePath: stagedPath },
+      { sessionId: "session-json" },
+    )
+    expect(written).toMatchObject({ artifactName: "plan_structured", artifactKind: "json" })
+
+    const artifact = db()
+      .select()
+      .from(artifactTable)
+      .all()
+      .find((row) => row.taskId === started.taskId && row.artifactName === "plan_structured")
+    expect(artifact).toBeDefined()
+    expect(readFileSync(path.join(opsRoot, artifact!.relativePath), "utf8")).toContain('"bridge"')
+    expect(existsSync(stagedPath)).toBe(false)
   })
 
   it("returns guard rejection details cleanly to the bridge caller", async () => {
