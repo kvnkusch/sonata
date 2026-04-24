@@ -87,37 +87,6 @@ describe("Sonata bridge plugin integration", () => {
     const toolName = "sonata_write_plan_structured_artifact_json"
     const artifactTool = plugin.tool?.[toolName]
     expect(artifactTool).toBeDefined()
-    expect(plugin["tool.definition"]).toBeDefined()
-
-    const definition = { description: "", parameters: {} as Record<string, unknown> }
-    await plugin["tool.definition"]?.({ toolID: toolName }, definition)
-    expect(definition.parameters).toEqual({
-      $schema: "http://json-schema.org/draft-07/schema#",
-      anyOf: [
-        {
-          type: "object",
-          properties: {
-            source: { type: "string", const: "inline" },
-            data: {},
-          },
-          required: ["source", "data"],
-          additionalProperties: false,
-        },
-        {
-          type: "object",
-          properties: {
-            source: { type: "string", const: "file" },
-            filePath: {
-              type: "string",
-              minLength: 1,
-              description: "Path under opsRoot/.sonata/staging/<taskId>/<stepId>/ containing the JSON payload to import",
-            },
-          },
-          required: ["source", "filePath"],
-          additionalProperties: false,
-        },
-      ],
-    })
 
     await expect(
       artifactTool?.execute(

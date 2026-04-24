@@ -1,4 +1,6 @@
 import { createServer } from "node:net"
+import { readFile } from "node:fs/promises"
+import path from "node:path"
 import { createOpencodeClient, createOpencodeServer, type Config } from "@opencode-ai/sdk/v2"
 import { eq } from "drizzle-orm"
 import { db, projectTable, stepTable, taskTable, type DbExecutor } from "../db"
@@ -164,6 +166,41 @@ async function withTemporaryEnv<T>(
   }
 }
 
+function stripJsonComments(input: string): string {
+  return input
+    .replace(/^\s*\/\/.*$/gm, "")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+}
+
+async function loadOpencodeUserConfig(): Promise<Config | undefined> {
+  const home = process.env.HOME
+  if (!home) return undefined
+
+  const candidates = [
+    path.join(home, ".config", "opencode", "opencode.jsonc"),
+    path.join(home, ".config", "opencode", "opencode.json"),
+  ]
+
+  for (const candidate of candidates) {
+    const file = Bun.file(candidate)
+    if (!(await file.exists())) continue
+    const raw = await readFile(candidate, "utf8")
+    const parsed = JSON.parse(stripJsonComments(raw)) as Config
+    return parsed
+  }
+
+  return undefined
+}
+
+async function buildOpencodeConfig(pluginUrl: string): Promise<Config> {
+  const userConfig = await loadOpencodeUserConfig()
+  const userPlugins = Array.isArray(userConfig?.plugin) ? userConfig.plugin : []
+  return {
+    ...(userConfig ?? {}),
+    plugin: [...new Set([...userPlugins, pluginUrl])],
+  }
+}
+
 export async function executeStep(
   input: ExecuteStepInput,
   executor: DbExecutor = db(),
@@ -253,7 +290,7 @@ export async function executeStep(
             }
 
             const pluginUrl = staticSonataBridgePluginUrl()
-            const opencodeConfig: Config = { plugin: [pluginUrl] }
+            const opencodeConfig = await buildOpencodeConfig(pluginUrl)
             const opencodeEnv = {
               SONATA_TASK_ID: input.taskId,
               SONATA_STEP_ID: input.stepId,
