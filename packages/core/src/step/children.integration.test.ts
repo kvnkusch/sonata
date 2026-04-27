@@ -224,15 +224,15 @@ describe("step.children integration", () => {
     const summary = summarizeChildSteps({ taskId, parentStepId: controllerStepId, stepKey: "worker" })
 
     expect(children.map((child) => [child.workKey, child.status])).toEqual([
-      ["alpha", "active"],
+      ["alpha", "pending"],
       ["beta", "completed"],
       ["gamma", "failed"],
     ])
     expect(summary).toEqual({
       stepKey: "worker",
       totalCount: 3,
-      pendingCount: 0,
-      activeCount: 1,
+      pendingCount: 1,
+      activeCount: 0,
       blockedCount: 0,
       orphanedCount: 0,
       completedCount: 1,
@@ -294,6 +294,8 @@ describe("step.children integration", () => {
       stepKey: "worker",
       workKey: "beta",
     })
+    db().update(stepTable).set({ status: "active" }).where(eq(stepTable.stepId, alpha.stepId)).run()
+    db().update(stepTable).set({ status: "active" }).where(eq(stepTable.stepId, beta.stepId)).run()
 
     await writeStepArtifact({
       taskId,

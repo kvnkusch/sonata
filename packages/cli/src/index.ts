@@ -1,6 +1,7 @@
 import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
 import { InitCommand } from "./cli/cmd/init"
+import { OpsCommand } from "./cli/cmd/ops"
 import { ProjectCommand } from "./cli/cmd/project"
 import { StepCommand } from "./cli/cmd/step"
 import { StatusCommand } from "./cli/cmd/status"
@@ -20,6 +21,7 @@ let cli = yargs(argv)
   .help("help", "show help")
   .alias("help", "h")
   .command(InitCommand)
+  .command(OpsCommand)
   .command(ProjectCommand)
   .command(StepCommand)
   .command(StatusCommand)

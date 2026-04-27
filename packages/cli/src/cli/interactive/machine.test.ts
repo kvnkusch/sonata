@@ -197,6 +197,7 @@ describe("interactive machine transitions", () => {
     expect(waiting.state.status).toBe("step_actions")
     expect(waiting.effects).toEqual([
       { type: "PRINT_STEP_RESULT" },
+      { type: "EXECUTE_WAITING_CHILDREN", taskId: "tsk_1", stepId: "stp_1" },
       { type: "GET_STEP", taskId: "tsk_1", stepId: "stp_1" },
     ])
   })
@@ -279,7 +280,10 @@ describe("interactive machine transitions", () => {
       expect(waiting.state.rootStepStatus).toBe("waiting")
       expect(waiting.state.shared.activeStepId).toBe("stp_1")
     }
-    expect(waiting.effects).toEqual([{ type: "GET_STEP", taskId: "tsk_1", stepId: "stp_1" }])
+    expect(waiting.effects).toEqual([
+      { type: "EXECUTE_WAITING_CHILDREN", taskId: "tsk_1", stepId: "stp_1" },
+      { type: "GET_STEP", taskId: "tsk_1", stepId: "stp_1" },
+    ])
   })
 
   it("resume task with active root step jumps to execute", () => {
@@ -323,7 +327,10 @@ describe("interactive machine transitions", () => {
       expect(resumed.state.rootStepStatus).toBe("waiting")
       expect(resumed.state.shared.activeStepId).toBe("stp_1")
     }
-    expect(resumed.effects).toEqual([{ type: "GET_STEP", taskId: "tsk_1", stepId: "stp_1" }])
+    expect(resumed.effects).toEqual([
+      { type: "EXECUTE_WAITING_CHILDREN", taskId: "tsk_1", stepId: "stp_1" },
+      { type: "GET_STEP", taskId: "tsk_1", stepId: "stp_1" },
+    ])
   })
 
   it("back from waiting step actions returns to main menu", () => {

@@ -8,6 +8,7 @@ import {
   defineWorkflow,
   type JsonValue,
   openCodeConfig,
+  openCodePermissions,
   openCodeTool,
   type WaitSpec,
   type WorkflowStepImplementations,
@@ -76,6 +77,14 @@ const implement = defineStep({
   id: "implement",
   title: "Implement",
   opencode: openCodeConfig({
+    model: "test/model",
+    agent: {
+      variant: "low",
+      permission: {
+        ...openCodePermissions.readOnly(),
+        question: "allow",
+      },
+    },
     tools: {
       fetch_plan_context: openCodeTool({
         description: "Fetch planning context",
@@ -150,6 +159,12 @@ const implement = defineStep({
     ] as const,
   },
 })
+
+// @ts-expect-error OpenCode steps must declare an exact model and agent variant.
+openCodeConfig({})
+
+// @ts-expect-error permissions must use OpenCode permission actions.
+openCodeConfig({ model: "test/model", agent: { variant: "low", permission: { bash: "maybe" } } })
 
 const workflowBuilder = defineWorkflow({
   apiVersion: 1,
@@ -228,6 +243,7 @@ const implementations: WorkflowStepImplementations<typeof workflowBuilder.steps>
       return {
         kind: "children",
         childStepKey: "implement",
+        concurrency: 2,
         until: "all_completed",
         label: ctx.opsRoot,
       } satisfies WaitSpec
@@ -470,6 +486,8 @@ const _foreignSchemaWorkflow = defineWorkflow({
       id: "implement",
       title: "Implement",
       opencode: openCodeConfig({
+        model: "test/model",
+        agent: { variant: "low" },
         tools: {
           checks: openCodeTool({
             description: "Run deterministic checks",

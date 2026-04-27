@@ -150,9 +150,7 @@ export async function getStepToolset(
       argsSchema:
         artifact.kind === "markdown"
           ? markdownArtifactArgsShape
-          : jsonArtifactArgsShape({
-              dataSchema: isZodSchema(artifact.schema) ? artifact.schema : undefined,
-            }),
+          : jsonArtifactArgsShape(),
     }
   })
 

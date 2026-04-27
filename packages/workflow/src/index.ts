@@ -89,6 +89,7 @@ export type WaitSpec = {
   kind: "children"
   childStepKey: string
   workKeys?: string[]
+  concurrency?: number
   until: "all_completed" | "all_terminal"
   label?: string
   details?: JsonValue
@@ -351,7 +352,46 @@ type OpenCodeToolInput = {
 
 export type OpenCodeTools = Record<string, OpenCodeToolInput>
 
+export type OpenCodePermissionAction = "ask" | "allow" | "deny"
+
+export type OpenCodePermissionRule = OpenCodePermissionAction | Record<string, OpenCodePermissionAction>
+
+export type OpenCodePermissionConfig = Record<string, OpenCodePermissionRule>
+
+export type OpenCodeAgentConfig = {
+  variant: string
+  temperature?: number
+  top_p?: number
+  permission?: OpenCodePermissionConfig
+  options?: Record<string, unknown>
+}
+
+export type OpenCodeProviderConfig = {
+  options?: Record<string, unknown>
+  models?: Record<
+    string,
+    {
+      reasoning?: boolean
+      limit?: {
+        context: number
+        input?: number
+        output: number
+      }
+      options?: Record<string, unknown>
+      variants?: Record<string, Record<string, unknown> & { disabled?: boolean }>
+    }
+  >
+}
+
+export type OpenCodePromptConfig = {
+  contract?: "standard" | "compact"
+}
+
 export type OpenCodeConfig<TTools extends OpenCodeTools = OpenCodeTools> = {
+  model: string
+  agent: OpenCodeAgentConfig
+  prompt?: OpenCodePromptConfig
+  provider?: Record<string, OpenCodeProviderConfig>
   tools?: TTools
 }
 
@@ -361,14 +401,38 @@ export function openCodeTool<const TArgsSchema extends Record<string, any>>(
   return tool
 }
 
-export function openCodeConfig(): OpenCodeConfig<Record<string, never>>
+export function openCodeConfig(config: {
+  model: string
+  agent: OpenCodeAgentConfig
+  prompt?: OpenCodePromptConfig
+  provider?: Record<string, OpenCodeProviderConfig>
+}): OpenCodeConfig<Record<string, never>>
 export function openCodeConfig<const TTools extends OpenCodeTools>(config: {
+  model: string
+  agent: OpenCodeAgentConfig
+  prompt?: OpenCodePromptConfig
+  provider?: Record<string, OpenCodeProviderConfig>
   tools: TTools
 }): OpenCodeConfig<TTools>
-export function openCodeConfig<const TTools extends OpenCodeTools>(config?: {
-  tools: TTools
+export function openCodeConfig<const TTools extends OpenCodeTools>(config: {
+  model: string
+  agent: OpenCodeAgentConfig
+  prompt?: OpenCodePromptConfig
+  provider?: Record<string, OpenCodeProviderConfig>
+  tools?: TTools
 }): OpenCodeConfig<TTools> {
-  return config ?? ({} as OpenCodeConfig<TTools>)
+  return config as OpenCodeConfig<TTools>
+}
+
+export const openCodePermissions = {
+  readOnly(): OpenCodePermissionConfig {
+    return {
+      bash: "deny",
+      edit: "deny",
+      task: "deny",
+      todowrite: "deny",
+    }
+  },
 }
 
 export type StepContextBase<

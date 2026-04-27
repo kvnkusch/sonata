@@ -1,6 +1,5 @@
 import { and, desc, eq } from "drizzle-orm"
 import { db, stepTable, taskTable, type DbExecutor } from "../db"
-import { TaskEventType, writeTaskEvent } from "../event/task-event"
 import { newStepId } from "../id"
 import { ErrorCode, RpcError } from "../rpc/base"
 import type { ChildSpawnResult } from "../workflow/module"
@@ -151,15 +150,15 @@ export async function spawnChildStep(
   if (!parentStep || parentStep.taskId !== input.taskId) {
     throw new RpcError(ErrorCode.STEP_NOT_FOUND, 404, `Step not found: ${input.parentStepId}`)
   }
+  if (parentStep.parentStepId !== null) {
+    throw new RpcError(ErrorCode.INVALID_INPUT, 409, `Only root steps may spawn child steps: ${input.parentStepId}`)
+  }
   if (parentStep.status !== "active") {
     throw new RpcError(
       ErrorCode.INVALID_STEP_TRANSITION,
       409,
       `Cannot spawn child step from inactive parent step: ${input.parentStepId}`,
     )
-  }
-  if (parentStep.parentStepId !== null) {
-    throw new RpcError(ErrorCode.INVALID_INPUT, 409, `Only root steps may spawn child steps: ${input.parentStepId}`)
   }
 
   const loaded = await loadWorkflowForTask(input.taskId, executor)
@@ -208,7 +207,7 @@ export async function spawnChildStep(
         taskId: input.taskId,
         stepKey: workflowStep.id,
         stepIndex,
-        status: "active",
+        status: "pending",
         parentStepId: input.parentStepId,
         workKey: input.workKey,
         inputs: storedChildInputsJson({ resolvedInputs, identity: rawSpawnIdentity }),
@@ -229,25 +228,11 @@ export async function spawnChildStep(
 
   executor.update(taskTable).set({ updatedAt: now }).where(eq(taskTable.taskId, input.taskId)).run()
 
-  writeTaskEvent({
-    executor,
-    taskId: input.taskId,
-    stepId,
-    eventType: TaskEventType.STEP_STARTED,
-    payload: {
-      stepId,
-      stepKey: workflowStep.id,
-      stepIndex,
-      inputs: resolvedInputs,
-    },
-    createdAt: now,
-  })
-
   return {
     stepId,
     stepKey: workflowStep.id,
     workKey: input.workKey,
-    status: "active",
+    status: "pending",
     existing: false,
   }
 }

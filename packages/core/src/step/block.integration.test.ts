@@ -37,7 +37,7 @@ function writeOpsWorkflowFiles(opsRoot: string) {
     {
       id: "plan",
       title: "Plan",
-      opencode: {},
+      opencode: { model: "test/model", agent: { variant: "low" } },
       async run() {},
       async on() {},
     },

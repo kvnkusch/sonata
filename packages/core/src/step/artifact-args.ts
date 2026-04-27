@@ -7,7 +7,7 @@ export const markdownArtifactArgsShape = {
   markdown: z.string().min(1),
 } satisfies z.ZodRawShape
 
-export const markdownArtifactPayloadSchema = z.object(markdownArtifactArgsShape).strict()
+export const markdownArtifactPayloadSchema = z.object(markdownArtifactArgsShape)
 
 export type MarkdownArtifactPayload = z.infer<typeof markdownArtifactPayloadSchema>
 
@@ -30,18 +30,14 @@ export function jsonArtifactPayloadSchema(input?: {
   dataSchema?: z.ZodTypeAny
 }) {
   return z.discriminatedUnion("source", [
-    z
-      .object({
-        source: z.literal("inline"),
-        data: input?.dataSchema ?? z.unknown(),
-      })
-      .strict(),
-    z
-      .object({
-        source: z.literal("file"),
-        filePath: jsonArtifactImportFilePathSchema,
-      })
-      .strict(),
+    z.object({
+      source: z.literal("inline"),
+      data: input?.dataSchema ?? z.unknown(),
+    }),
+    z.object({
+      source: z.literal("file"),
+      filePath: jsonArtifactImportFilePathSchema,
+    }),
   ])
 }
 

@@ -115,6 +115,7 @@ export type Effect =
   | { type: "PRINT_STEP_RESULT" }
   | { type: "PRINT_STEP_DETAILS" }
   | { type: "PRINT_CHILD_STEPS" }
+  | { type: "EXECUTE_WAITING_CHILDREN"; taskId: string; stepId: string }
   | { type: "PROMPT_STEP_ACTIONS"; rootStepStatus: OpenRootStepStatus }
   | { type: "RESUME_BLOCKED_STEP"; taskId: string; stepId: string }
   | { type: "RETRY_ORPHANED_STEP"; taskId: string; stepId: string }
@@ -278,7 +279,12 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
                 stepId: event.currentRootStepId,
                 rootStepStatus: event.currentRootStepStatus,
               },
-              effects: [{ type: "GET_STEP", taskId: event.taskId, stepId: event.currentRootStepId }],
+              effects: [
+                ...(event.currentRootStepStatus === "waiting"
+                  ? ([{ type: "EXECUTE_WAITING_CHILDREN", taskId: event.taskId, stepId: event.currentRootStepId }] as Effect[])
+                  : []),
+                { type: "GET_STEP", taskId: event.taskId, stepId: event.currentRootStepId },
+              ],
             }
           }
           return stepSelectionTarget(
@@ -453,7 +459,12 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
               { type: "PRINT_STEP_RESULT" },
               ...(event.result.status === "active"
                 ? ([{ type: "PROMPT_STEP_ACTIONS", rootStepStatus: "active" }] as Effect[])
-                : ([{ type: "GET_STEP", taskId: state.taskId, stepId: state.stepId }] as Effect[])),
+                : ([
+                    ...(event.result.status === "waiting"
+                      ? ([{ type: "EXECUTE_WAITING_CHILDREN", taskId: state.taskId, stepId: state.stepId }] as Effect[])
+                      : []),
+                    { type: "GET_STEP", taskId: state.taskId, stepId: state.stepId },
+                  ] as Effect[])),
             ],
           }
         }
@@ -523,7 +534,12 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
         case "STEP_ACTION_REFRESH":
           return {
             state,
-            effects: [{ type: "GET_STEP", taskId: state.taskId, stepId: state.stepId }],
+            effects: [
+              ...(state.rootStepStatus === "waiting"
+                ? ([{ type: "EXECUTE_WAITING_CHILDREN", taskId: state.taskId, stepId: state.stepId }] as Effect[])
+                : []),
+              { type: "GET_STEP", taskId: state.taskId, stepId: state.stepId },
+            ],
           }
         case "STEP_ACTION_INSPECT_CHILDREN":
           return {
@@ -628,7 +644,12 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
                 stepId: event.currentRootStepId,
                 rootStepStatus: event.currentRootStepStatus,
               },
-              effects: [{ type: "GET_STEP", taskId: state.taskId, stepId: event.currentRootStepId }],
+              effects: [
+                ...(event.currentRootStepStatus === "waiting"
+                  ? ([{ type: "EXECUTE_WAITING_CHILDREN", taskId: state.taskId, stepId: event.currentRootStepId }] as Effect[])
+                  : []),
+                { type: "GET_STEP", taskId: state.taskId, stepId: event.currentRootStepId },
+              ],
             }
           }
 

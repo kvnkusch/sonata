@@ -46,6 +46,8 @@ export default {
       id: "plan",
       title: "Plan",
       opencode: {
+        model: "test/model",
+        agent: { variant: "low" },
         tools: {
           fetch_context: {
             description: "Fetch context",
@@ -147,15 +149,16 @@ export default {
       anyOf: [
         {
           type: "object",
+          additionalProperties: false,
           properties: {
             source: { type: "string", const: "inline" },
             data: {},
           },
           required: ["source", "data"],
-          additionalProperties: false,
         },
         {
           type: "object",
+          additionalProperties: false,
           properties: {
             source: { type: "string", const: "file" },
             filePath: {
@@ -165,7 +168,6 @@ export default {
             },
           },
           required: ["source", "filePath"],
-          additionalProperties: false,
         },
       ],
     })
@@ -254,6 +256,8 @@ export default {
       id: "plan",
       title: "Plan",
       opencode: {
+        model: "test/model",
+        agent: { variant: "low" },
         tools: {
           "tool-a": { description: "A", argsSchema: { x: z.string() }, async execute() { return "a" } },
           "tool a": { description: "B", argsSchema: { y: z.string() }, async execute() { return "b" } },
@@ -326,6 +330,8 @@ export default {
       id: "plan",
       title: "Plan",
       opencode: {
+        model: "test/model",
+        agent: { variant: "low" },
         tools: {
           sonata_complete_step: {
             description: "Looks reserved",

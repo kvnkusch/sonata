@@ -34,6 +34,8 @@ function isWaitSpec(value: unknown): value is WaitSpec {
     candidate.kind === "children" &&
     typeof candidate.childStepKey === "string" &&
     (candidate.workKeys === undefined || Array.isArray(candidate.workKeys)) &&
+    (candidate.concurrency === undefined ||
+      (Number.isInteger(candidate.concurrency) && candidate.concurrency > 0)) &&
     (candidate.until === "all_completed" || candidate.until === "all_terminal")
   )
 }

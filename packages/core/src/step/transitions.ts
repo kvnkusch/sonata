@@ -1,7 +1,7 @@
 import { ErrorCode, RpcError } from "../rpc/base"
 
 export const stepTransitions = {
-  pending: ["active", "cancelled"],
+  pending: ["active", "completed", "failed", "cancelled"],
   active: ["waiting", "blocked", "completed", "failed", "cancelled"],
   waiting: ["active", "failed", "cancelled"],
   blocked: ["active", "orphaned", "failed", "cancelled"],
@@ -13,7 +13,7 @@ export const stepTransitions = {
 
 export type StepStatus = keyof typeof stepTransitions
 
-export const openStepStatuses = ["active", "waiting", "blocked", "orphaned"] as const satisfies readonly StepStatus[]
+export const openStepStatuses = ["pending", "active", "waiting", "blocked", "orphaned"] as const satisfies readonly StepStatus[]
 
 export function canTransitionStep(from: StepStatus, to: StepStatus): boolean {
   return (stepTransitions[from] as readonly StepStatus[]).includes(to)

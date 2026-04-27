@@ -30,6 +30,8 @@ export default {
       id: "plan",
       title: "Plan",
       opencode: {
+        model: "test/model",
+        agent: { variant: "low" },
         tools: {
           format_summary: {
             description: "Format summary",
@@ -189,6 +191,8 @@ export default {
       id: "plan",
       title: "Plan",
       opencode: {
+        model: "test/model",
+        agent: { variant: "low" },
         tools: {
           return_non_json: {
             description: "Return unsupported payload",

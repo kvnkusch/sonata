@@ -557,7 +557,8 @@ export default {
       },
       waitSnapshot: {
         totalCount: 1,
-        activeCount: 1,
+        pendingCount: 1,
+        activeCount: 0,
         completedCount: 0,
       },
     })
@@ -699,6 +700,8 @@ export default {
       id: "plan",
       title: "Plan",
       opencode: {
+        model: "test/model",
+        agent: { variant: "low" },
         tools: {
           "repo_lookup": {
             description: "Lookup repo",
@@ -769,7 +772,7 @@ export default {
 
         const children = await ctx.children.list({ stepKey: "worker" })
         const summary = await ctx.children.summary({ stepKey: "worker" })
-        if (children.length !== 1 || summary.totalCount !== 1 || summary.activeCount !== 1) {
+        if (children.length !== 1 || summary.totalCount !== 1 || summary.pendingCount !== 1) {
           throw new Error("child APIs returned unexpected data")
         }
 
@@ -911,7 +914,7 @@ export default {
     expect(controllerResult.status).toBe("waiting")
 
     const child = db().select().from(stepTable).where(eq(stepTable.parentStepId, controller.stepId)).get()
-    expect(child?.status).toBe("active")
+    expect(child?.status).toBe("pending")
 
     const childResult = await executeStep({ taskId: task.taskId, stepId: child!.stepId })
     expect(childResult.status).toBe("completed")

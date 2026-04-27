@@ -3,9 +3,14 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { artifactTable, closeDb, db } from "@sonata/core/db";
 import { executeStep } from "@sonata/core/execution";
+import { createCaller } from "@sonata/core/rpc";
 import { getStep, listStepsForTask } from "@sonata/core/step";
 import { completeTask } from "@sonata/core/task";
-import { clearWorkflowCache } from "@sonata/core/workflow";
+import { clearWorkflowCache, loadWorkflowForTask, readOpsConfig } from "@sonata/core/workflow";
+import {
+  createEffectRunner,
+  type EffectRuntime,
+} from "../../cli/src/cli/interactive/effect-runner";
 import {
   createScenarioSandbox,
   destroyScenarioSandbox,
@@ -16,6 +21,40 @@ import {
 } from "./harness";
 
 const sandboxes: ScenarioSandbox[] = [];
+
+async function runWaitingChildren(taskId: string, stepId: string) {
+  const runEffect = createEffectRunner({
+    prompts: {
+      async select() {
+        return "unused" as never;
+      },
+      isCancel(_value: unknown): _value is symbol {
+        return false;
+      },
+      outro() {},
+    },
+    ui: { println() {}, error() {} },
+    async ensureLinkedProject() {
+      throw new Error("ensureLinkedProject is not used by this e2e helper");
+    },
+    readOpsConfig,
+    loadWorkflowForTask,
+    async collectStepInputs() {
+      return {};
+    },
+    executeStep,
+    async attachOpencodeTui() {},
+  });
+  const runtime: EffectRuntime = {
+    caller: createCaller(),
+    sharedCtx: null,
+    listedTasks: new Map(),
+    lastStepResult: null,
+    lastStepDetail: null,
+  };
+
+  await runEffect({ type: "EXECUTE_WAITING_CHILDREN", taskId, stepId }, runtime);
+}
 
 afterEach(() => {
   clearWorkflowCache();
@@ -78,12 +117,14 @@ describe("starlane evacuation e2e", () => {
         kind: "children",
         childStepKey: "survey_sector",
         workKeys: ["aurora", "cinder", "glass"],
+        concurrency: 2,
         until: "all_completed",
         label: "Waiting for survey squadrons",
       },
       waitSnapshot: {
         totalCount: 3,
-        activeCount: 3,
+        pendingCount: 3,
+        activeCount: 0,
         completedCount: 0,
       },
     });
@@ -105,13 +146,24 @@ describe("starlane evacuation e2e", () => {
       "cinder",
       "glass",
     ]);
+    expect(children.map((child) => child.status)).toEqual([
+      "pending",
+      "pending",
+      "pending",
+    ]);
 
-    for (const child of children) {
-      const childResult = await executeStep({ taskId, stepId: child.stepId });
-      expect(childResult.status).toBe("completed");
-    }
-
+    await runWaitingChildren(taskId, stepId);
     expect(getStep({ taskId, stepId }).status).toBe("active");
+
+    const completedChildren = listStepsForTask({ taskId }).filter(
+      (step) => step.parentStepId === stepId,
+    );
+    expect(completedChildren.map((child) => child.status)).toEqual([
+      "completed",
+      "completed",
+      "completed",
+    ]);
+
     const listedAwake = runCli(
       ["task", "list", "--project-id", "prj_starlane"],
       sandbox.env,

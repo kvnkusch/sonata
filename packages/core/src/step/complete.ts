@@ -412,7 +412,7 @@ export async function completeStepWithGuards(
         and(
           eq(stepTable.taskId, input.taskId),
           eq(stepTable.parentStepId, input.stepId),
-          inArray(stepTable.status, ["active", "blocked", "orphaned"]),
+          inArray(stepTable.status, ["pending", "active", "blocked", "orphaned"]),
         ),
       )
       .all()
@@ -478,7 +478,7 @@ export async function completeStepWithGuards(
         typeof input.completionPayload === "undefined" ? null : JSON.stringify(input.completionPayload),
       sessionId: effectiveSessionId,
     })
-    .where(and(eq(stepTable.stepId, step.stepId), eq(stepTable.status, "active")))
+    .where(and(eq(stepTable.stepId, step.stepId), eq(stepTable.status, step.status)))
     .run()
 
   if (affectedRowCount(completionUpdate) === 0) {

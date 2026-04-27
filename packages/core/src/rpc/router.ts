@@ -3,6 +3,7 @@ import path from "node:path"
 import { eq } from "drizzle-orm"
 import { db } from "../db"
 import { projectTable } from "../db/project.sql"
+import { getOpsSkillInstallState, installOpsSkills } from "../ops"
 import { taskTable } from "../db/task.sql"
 import { getProjectById, linkOpsRepo } from "../project"
 import { resolveFromCwd } from "../scope"
@@ -23,6 +24,7 @@ import {
 import { completeTask, deleteTask, listActiveTasks, startTask } from "../task"
 import {
   ErrorCode,
+  OpsSkillsInput,
   ProjectLinkInput,
   RpcError,
   ScopeResolveInput,
@@ -72,6 +74,30 @@ export const router = {
       }
       try {
         return db().transaction((tx) => linkOpsRepo(parsed.data, tx))
+      } catch (error) {
+        throw invalidInput(error)
+      }
+    },
+  },
+  ops: {
+    getSkillInstallState(input: unknown) {
+      const parsed = OpsSkillsInput.safeParse(input)
+      if (!parsed.success) {
+        throw invalidInput(parsed.error)
+      }
+      try {
+        return getOpsSkillInstallState(parsed.data)
+      } catch (error) {
+        throw invalidInput(error)
+      }
+    },
+    installSkills(input: unknown) {
+      const parsed = OpsSkillsInput.safeParse(input)
+      if (!parsed.success) {
+        throw invalidInput(parsed.error)
+      }
+      try {
+        return installOpsSkills(parsed.data)
       } catch (error) {
         throw invalidInput(error)
       }

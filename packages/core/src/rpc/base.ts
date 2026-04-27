@@ -45,6 +45,10 @@ export const ProjectLinkInput = z.object({
   projectId: z.string().min(1).optional(),
 })
 
+export const OpsSkillsInput = z.object({
+  opsRoot: z.string().min(1),
+})
+
 export const TaskStartInput = z.object({
   taskId: z.string().min(1).optional(),
   projectId: z.string().min(1),
@@ -115,12 +119,12 @@ export const StepWriteArtifactInput = z.discriminatedUnion("artifactKind", [
     ...StepWriteArtifactBase,
     artifactKind: z.literal("markdown"),
     payload: markdownArtifactPayloadSchema,
-  }).strict(),
+  }),
   z.object({
     ...StepWriteArtifactBase,
     artifactKind: z.literal("json"),
     payload: jsonArtifactPayloadSchema(),
-  }).strict(),
+  }),
 ])
 
 export const StepInvokeToolInput = z.object({

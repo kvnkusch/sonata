@@ -210,6 +210,7 @@ export default workflow.implement({
         kind: "children",
         childStepKey: "survey_sector",
         workKeys: [...sectors],
+        concurrency: 2,
         until: "all_completed",
         label: "Waiting for survey squadrons",
         details: { convoy: "Nightglass" },

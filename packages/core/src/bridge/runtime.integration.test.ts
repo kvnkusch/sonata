@@ -29,6 +29,8 @@ export default {
       id: "plan",
       title: "Plan",
       opencode: {
+        model: "test/model",
+        agent: { variant: "low" },
         tools: {
           custom_echo: {
             description: "Echo custom input",
@@ -189,7 +191,7 @@ describe("bridge runtime integration", () => {
       id: "plan",
       title: "Plan",
       next: "ship",
-      opencode: {},
+      opencode: { model: "test/model", agent: { variant: "low" } },
       artifacts: [{ name: "ticket_summary", kind: "markdown", required: true, once: true }],
       async run() {},
       async on(_ctx, event) {
@@ -317,6 +319,72 @@ describe("bridge runtime integration", () => {
     expect(existsSync(stagedPath)).toBe(false)
   })
 
+  it("accepts file-mode artifact writes even when OpenCode sends an extra data key", async () => {
+    const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-bridge-runtime-json-file-extra-data-"))
+    tempDirs.push(sandbox)
+
+    const projectRoot = path.join(sandbox, "project")
+    const opsRoot = path.join(sandbox, "ops")
+    mkdirSync(path.join(projectRoot, ".git"), { recursive: true })
+    mkdirSync(path.join(opsRoot, "workflows"), { recursive: true })
+
+    writeFileSync(
+      path.join(opsRoot, "workflows", "default.ts"),
+      `export default {
+  apiVersion: 1,
+  id: "default",
+  version: "0.1.0",
+  name: "Default",
+  steps: [
+    {
+      id: "plan",
+      title: "Plan",
+      opencode: { model: "test/model", agent: { variant: "low" } },
+      artifacts: [{ name: "plan_structured", kind: "json", required: true, once: true, schema: { parse: (value) => value } }],
+      async run() {},
+      async on() {},
+    },
+  ],
+}
+`,
+      "utf8",
+    )
+    writeFileSync(
+      path.join(opsRoot, "config.json"),
+      JSON.stringify({ version: 1, defaultWorkflowId: "default", workflowModules: [{ id: "default", path: "./workflows/default.ts" }] }, null, 2),
+      "utf8",
+    )
+
+    process.env.SONATA_DB_PATH = path.join(sandbox, "db", "sonata.db")
+
+    const linked = db().transaction((tx) => linkOpsRepo({ projectRoot, opsRoot, projectId: "prj_bridge_file_extra" }, tx))
+    const started = await startTask({ projectId: linked.projectId, workflowRef: { name: "default" } })
+    const step = await startStep({ taskId: started.taskId, stepKey: "plan" })
+
+    const stagingDir = path.join(opsRoot, ".sonata", "staging", started.taskId, step.stepId)
+    mkdirSync(stagingDir, { recursive: true })
+    const stagedPath = path.join(stagingDir, "plan-structured.json")
+    writeFileSync(stagedPath, JSON.stringify({ bullets: ["bridge"] }), "utf8")
+
+    const runtime = await startupBridgeRuntime({
+      env: {
+        SONATA_TASK_ID: started.taskId,
+        SONATA_STEP_ID: step.stepId,
+        SONATA_PROJECT_ROOT: projectRoot,
+        SONATA_OPS_ROOT: opsRoot,
+      },
+    })
+
+    const artifactTool = runtime.tools.find((tool) => tool.name === "sonata_write_plan_structured_artifact_json")
+    expect(artifactTool).toBeDefined()
+
+    const written = await artifactTool?.invoke(
+      { source: "file", filePath: stagedPath, data: { ignored: true } },
+      { sessionId: "session-json" },
+    )
+    expect(written).toMatchObject({ artifactName: "plan_structured", artifactKind: "json" })
+  })
+
   it("returns guard rejection details cleanly to the bridge caller", async () => {
     const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-bridge-runtime-guard-"))
     tempDirs.push(sandbox)
@@ -336,7 +404,7 @@ describe("bridge runtime integration", () => {
     {
       id: "plan",
       title: "Plan",
-      opencode: {},
+      opencode: { model: "test/model", agent: { variant: "low" } },
       canComplete() {
         return { ok: false, code: "review_required", message: "Review required", details: { lane: "ops" } }
       },
@@ -409,7 +477,7 @@ describe("bridge runtime integration", () => {
       id: "plan",
       title: "Plan",
       next: "ship",
-      opencode: {},
+      opencode: { model: "test/model", agent: { variant: "low" } },
       async run(ctx) {
         await ctx.opencode.start({ prompt: "Continue the existing session until complete" })
       },

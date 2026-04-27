@@ -69,6 +69,7 @@ export function createScenarioSandbox(fixtureName: string): ScenarioSandbox {
   patchWorkflowFixture(opsRoot);
 
   process.env.SONATA_DB_PATH = dbPath;
+  process.env.SONATA_SKIP_OPENCODE_PROMPT_ASYNC = "1";
 
   return {
     sandboxRoot,
@@ -77,13 +78,17 @@ export function createScenarioSandbox(fixtureName: string): ScenarioSandbox {
     projectRoot,
     opsRoot,
     dbPath,
-    env: stringEnv({ SONATA_DB_PATH: dbPath }),
+    env: stringEnv({
+      SONATA_DB_PATH: dbPath,
+      SONATA_SKIP_OPENCODE_PROMPT_ASYNC: "1",
+    }),
   };
 }
 
 export function destroyScenarioSandbox(sandbox: ScenarioSandbox) {
   closeDb();
   delete process.env.SONATA_DB_PATH;
+  delete process.env.SONATA_SKIP_OPENCODE_PROMPT_ASYNC;
   rmSync(sandbox.sandboxRoot, { recursive: true, force: true });
 }
 

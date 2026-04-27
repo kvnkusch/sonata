@@ -3,7 +3,10 @@ import { defineStep, defineWorkflow } from "__SONATA_WORKFLOW_IMPORT__";
 const stabilizeBeacon = defineStep({
   id: "stabilize_beacon",
   title: "Stabilize Beacon",
-  opencode: {},
+  opencode: {
+    model: "test/model",
+    agent: { variant: "low" },
+  },
   artifacts: [
     {
       name: "repair_manifest",

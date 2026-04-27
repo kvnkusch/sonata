@@ -87,6 +87,12 @@ describe("Sonata bridge plugin integration", () => {
     const toolName = "sonata_write_plan_structured_artifact_json"
     const artifactTool = plugin.tool?.[toolName]
     expect(artifactTool).toBeDefined()
+    expect(plugin["tool.definition"]).toBeDefined()
+
+    const definition = { description: "", parameters: {} as Record<string, unknown> }
+    await plugin["tool.definition"]?.({ toolID: toolName }, definition)
+    expect(definition.description).toContain("plan_structured")
+    expect(definition.parameters).toEqual({})
 
     await expect(
       artifactTool?.execute(
