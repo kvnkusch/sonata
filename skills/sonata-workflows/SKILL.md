@@ -16,7 +16,7 @@ compatibility: opencode
 
 1. Read the workflow definition before editing: step IDs, titles, inputs, artifacts, `next`, `waitFor`, guards, and OpenCode config.
 2. Keep artifact declarations and writes in sync. If a step writes data that another step consumes, declare the artifact and consume it through step inputs.
-3. Use JSON artifacts for structured state and markdown artifacts for operator-readable analysis or reports.
+3. Use JSON artifacts for structured state, JSONL artifacts for append-like row/event streams, and markdown artifacts for operator-readable analysis or reports.
 4. Preserve required artifact checks. Do not bypass validation to make a step complete.
 5. Use stable child `workKey` values for fan-out. Prefer durable IDs from the domain over array indices, generated labels, or free text.
 6. For fan-in, inspect child statuses and required child artifacts before completing the parent.
@@ -41,6 +41,7 @@ compatibility: opencode
 - Call `sonata_complete_step` exactly once and only claim completion if it succeeds.
 - If autonomous progress is impossible, call `sonata_block_step` once with a specific code, message, details, and resume hint.
 - For large JSON artifacts, stage JSON in `SONATA_OPS_ROOT/.sonata/staging/<taskId>/<stepId>/...` and pass the staged file path to the JSON artifact tool when supported.
+- For JSONL artifacts, write newline-delimited JSON with one valid JSON object per line; for large payloads, stage the `.jsonl` file in `SONATA_OPS_ROOT/.sonata/staging/<taskId>/<stepId>/...` and pass the staged file path to the JSONL artifact tool when supported.
 - Never complete a parent step just because child work was spawned. Completion depends on the declared wait condition and guards.
 
 ## OpenCode Sessions
@@ -56,7 +57,7 @@ compatibility: opencode
 ## Common Failure Patterns
 
 - Missing required artifact: the step completed before writing all required artifacts, or the artifact name/kind does not match the declaration.
-- Artifact kind mismatch: a markdown artifact was written through a JSON tool or the reverse.
+- Artifact kind mismatch: a markdown artifact was written through a JSON/JSONL tool, a JSON artifact through the JSONL tool, or the reverse.
 - Write-once violation: a step attempted to rewrite an artifact declared with `once` semantics.
 - Waiting parent stuck: children are blocked, failed, orphaned, or missing required artifacts for a completion guard.
 - Fan-out duplicates: unstable `workKey` values caused duplicate or conflicting child steps.
