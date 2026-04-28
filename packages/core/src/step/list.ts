@@ -23,6 +23,7 @@ export function listStepsForTask(input: { taskId: string }, executor: DbExecutor
     parentStepId: row.parentStepId,
     workKey: row.workKey,
     sessionId: row.sessionId,
+    opencodeBaseUrl: row.opencodeBaseUrl,
     startedAt: row.startedAt,
     completedAt: row.completedAt,
   }))

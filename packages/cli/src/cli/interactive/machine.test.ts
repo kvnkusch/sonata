@@ -202,6 +202,87 @@ describe("interactive machine transitions", () => {
     ])
   })
 
+  it("auto join sessions attach immediately", () => {
+    const main = linkedMainMenuState()
+    const executing: InteractiveState = {
+      status: "executing_step",
+      taskId: "tsk_1",
+      stepId: "stp_1",
+      shared: {
+        ...(main.status === "main_menu" ? main.shared : ({} as never)),
+        activeTaskId: "tsk_1",
+        activeStepId: "stp_1",
+      },
+    }
+
+    const active = transition(executing, {
+      type: "STEP_EXECUTE_OK",
+      result: {
+        status: "active",
+        suggestedNextStepKey: null,
+        opencodeSession: {
+          baseUrl: "http://127.0.0.1:1234",
+          sessionId: "ses_1",
+          reused: false,
+          join: "auto",
+          attach: true,
+        },
+      },
+    })
+
+    expect(active.effects).toEqual([
+      {
+        type: "ATTACH_OPENCODE",
+        projectRoot: "/tmp/project",
+        baseUrl: "http://127.0.0.1:1234",
+        sessionId: "ses_1",
+      },
+      { type: "PRINT_STEP_RESULT" },
+      { type: "GET_STEP", taskId: "tsk_1", stepId: "stp_1" },
+    ])
+  })
+
+  it("background join sessions print attach details without auto attach", () => {
+    const main = linkedMainMenuState()
+    const executing: InteractiveState = {
+      status: "executing_step",
+      taskId: "tsk_1",
+      stepId: "stp_1",
+      shared: {
+        ...(main.status === "main_menu" ? main.shared : ({} as never)),
+        activeTaskId: "tsk_1",
+        activeStepId: "stp_1",
+      },
+    }
+
+    const active = transition(executing, {
+      type: "STEP_EXECUTE_OK",
+      result: {
+        status: "active",
+        suggestedNextStepKey: null,
+        opencodeSession: {
+          baseUrl: "http://127.0.0.1:1234",
+          sessionId: "ses_1",
+          reused: false,
+          join: "background",
+          attach: false,
+        },
+      },
+    })
+
+    expect(active.effects).toEqual([
+      {
+        type: "PRINT_OPENCODE_SESSION",
+        taskId: "tsk_1",
+        stepId: "stp_1",
+        baseUrl: "http://127.0.0.1:1234",
+        sessionId: "ses_1",
+      },
+      { type: "PRINT_STEP_RESULT" },
+      { type: "GET_STEP", taskId: "tsk_1", stepId: "stp_1" },
+    ])
+  })
+
   it("blocked execute loads step details before prompting for actions", () => {
     const main = linkedMainMenuState()
     const stepActions: InteractiveState = {

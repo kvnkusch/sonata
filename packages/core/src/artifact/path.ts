@@ -1,10 +1,11 @@
 import path from "node:path"
 
-export type ArtifactKind = "markdown" | "json"
+export type ArtifactKind = "markdown" | "json" | "jsonl"
 
 const extensionByKind: Record<ArtifactKind, string> = {
   markdown: "md",
   json: "json",
+  jsonl: "jsonl",
 }
 
 export function slugifyArtifactSegment(value: string): string {

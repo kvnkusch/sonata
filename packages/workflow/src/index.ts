@@ -20,7 +20,7 @@ type SchemaOutput<TSchema> = TSchema extends { _output: infer TOutput }
     ? TOutput
     : unknown
 
-export type ArtifactKind = "markdown" | "json"
+export type ArtifactKind = "markdown" | "json" | "jsonl"
 
 export type ArtifactRef = {
   kind: ArtifactKind
@@ -225,9 +225,19 @@ export type WorkflowStepArtifactJson<TSchema extends SchemaParser = SchemaParser
   description?: string
 }
 
+export type WorkflowStepArtifactJsonl<TSchema extends SchemaParser = SchemaParser> = {
+  name: string
+  kind: "jsonl"
+  schema: TSchema
+  required?: boolean
+  once?: boolean
+  description?: string
+}
+
 export type WorkflowStepArtifact =
   | WorkflowStepArtifactMarkdown
   | WorkflowStepArtifactJson
+  | WorkflowStepArtifactJsonl
 
 export type WorkflowStepInputArtifactSelectorMode = "latest" | "all" | "indices"
 
@@ -292,6 +302,8 @@ type InferArtifactValue<
       ? string
       : TArtifact extends { kind: "json"; schema: infer TSchema extends SchemaParser }
         ? SchemaOutput<TSchema>
+        : TArtifact extends { kind: "jsonl"; schema: infer TSchema extends SchemaParser }
+          ? SchemaOutput<TSchema>[]
         : TArtifact extends { kind: "json" }
           ? JsonValue
           : never
@@ -387,10 +399,17 @@ export type OpenCodePromptConfig = {
   contract?: "standard" | "compact"
 }
 
+export type OpenCodeSessionJoinPolicy = "auto" | "ask" | "background"
+
+export type OpenCodeSessionConfig = {
+  join?: OpenCodeSessionJoinPolicy
+}
+
 export type OpenCodeConfig<TTools extends OpenCodeTools = OpenCodeTools> = {
   model: string
   agent: OpenCodeAgentConfig
   prompt?: OpenCodePromptConfig
+  session?: OpenCodeSessionConfig
   provider?: Record<string, OpenCodeProviderConfig>
   tools?: TTools
 }
@@ -405,12 +424,14 @@ export function openCodeConfig(config: {
   model: string
   agent: OpenCodeAgentConfig
   prompt?: OpenCodePromptConfig
+  session?: OpenCodeSessionConfig
   provider?: Record<string, OpenCodeProviderConfig>
 }): OpenCodeConfig<Record<string, never>>
 export function openCodeConfig<const TTools extends OpenCodeTools>(config: {
   model: string
   agent: OpenCodeAgentConfig
   prompt?: OpenCodePromptConfig
+  session?: OpenCodeSessionConfig
   provider?: Record<string, OpenCodeProviderConfig>
   tools: TTools
 }): OpenCodeConfig<TTools>
@@ -418,6 +439,7 @@ export function openCodeConfig<const TTools extends OpenCodeTools>(config: {
   model: string
   agent: OpenCodeAgentConfig
   prompt?: OpenCodePromptConfig
+  session?: OpenCodeSessionConfig
   provider?: Record<string, OpenCodeProviderConfig>
   tools?: TTools
 }): OpenCodeConfig<TTools> {
@@ -439,6 +461,7 @@ export type StepContextBase<
   TInputs extends StepInputs<unknown, Record<string, StepInputArtifactBinding>> = StepInputs,
   TMarkdownSlug extends string = string,
   TJsonArtifactData extends Record<string, JsonValue> = Record<string, JsonValue>,
+  TJsonlArtifactData extends Record<string, JsonValue[]> = Record<string, JsonValue[]>,
 > = {
   repoRoot: string
   opsRoot: string
@@ -455,6 +478,10 @@ export type StepContextBase<
     slug: TSlug
     data: TJsonArtifactData[TSlug]
     schema?: JsonSchema
+  }) => Promise<ArtifactRef>
+  writeJsonlArtifact: <TSlug extends keyof TJsonlArtifactData & string>(params: {
+    slug: TSlug
+    rows: TJsonlArtifactData[TSlug]
   }) => Promise<ArtifactRef>
   completeStep: (payload?: unknown) => Promise<unknown>
   completeTask?: (payload?: unknown) => Promise<unknown>
@@ -575,7 +602,13 @@ type JsonArtifactDefinitionsOf<TStep extends WorkflowStepDefinition> = Extract<
   { kind: "json" }
 >
 
+type JsonlArtifactDefinitionsOf<TStep extends WorkflowStepDefinition> = Extract<
+  ArtifactDefinitionsOf<TStep>,
+  { kind: "jsonl" }
+>
+
 type JsonArtifactNamesOf<TStep extends WorkflowStepDefinition> = JsonArtifactDefinitionsOf<TStep>["name"]
+type JsonlArtifactNamesOf<TStep extends WorkflowStepDefinition> = JsonlArtifactDefinitionsOf<TStep>["name"]
 
 type JsonArtifactDataFor<
   TStep extends WorkflowStepDefinition,
@@ -592,10 +625,25 @@ type JsonArtifactDataMapOf<TStep extends WorkflowStepDefinition> = [JsonArtifact
     [TArtifactName in JsonArtifactNamesOf<TStep>]: JsonArtifactDataFor<TStep, TArtifactName>
   }
 
+type JsonlArtifactDataFor<
+  TStep extends WorkflowStepDefinition,
+  TArtifactName extends string,
+> = Extract<JsonlArtifactDefinitionsOf<TStep>, { name: TArtifactName }> extends infer TArtifact
+  ? TArtifact extends { schema: infer TSchema extends SchemaParser }
+    ? SchemaOutput<TSchema>[]
+    : JsonValue[]
+  : JsonValue[]
+
+type JsonlArtifactDataMapOf<TStep extends WorkflowStepDefinition> = [JsonlArtifactNamesOf<TStep>] extends [never]
+  ? Record<string, never>
+  : {
+    [TArtifactName in JsonlArtifactNamesOf<TStep>]: JsonlArtifactDataFor<TStep, TArtifactName>
+  }
+
 type InferStepContextBase<
   TSteps extends readonly WorkflowStepDefinition[],
   TStep extends WorkflowStepDefinition,
-> = StepContextBase<InferStepInputs<TSteps, TStep>, MarkdownArtifactNamesOf<TStep>, JsonArtifactDataMapOf<TStep>>
+> = StepContextBase<InferStepInputs<TSteps, TStep>, MarkdownArtifactNamesOf<TStep>, JsonArtifactDataMapOf<TStep>, JsonlArtifactDataMapOf<TStep>>
 
 type InferStepContextWithOpenCode<
   TSteps extends readonly WorkflowStepDefinition[],

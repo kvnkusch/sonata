@@ -2,6 +2,7 @@ import { realpathSync } from "node:fs"
 import { eq } from "drizzle-orm"
 import { db, type DbExecutor, type DbTx } from "../db"
 import { projectTable, type ProjectRow } from "../db/project.sql"
+import { taskTable } from "../db/task.sql"
 import { newProjectId } from "../id"
 import { resolveFromCwd } from "../scope"
 
@@ -18,6 +19,12 @@ export function getProjectById(projectId: string, executor: DbExecutor = db()): 
 export function getProjectByRoot(projectRoot: string, executor: DbExecutor = db()): ProjectRow | undefined {
   const root = realpathSync(projectRoot)
   return executor.select().from(projectTable).where(eq(projectTable.projectRootRealpath, root)).get()
+}
+
+export function getProjectByTaskId(taskId: string, executor: DbExecutor = db()): ProjectRow | undefined {
+  const task = executor.select().from(taskTable).where(eq(taskTable.taskId, taskId)).get()
+  if (!task) return undefined
+  return getProjectById(task.projectId, executor)
 }
 
 export function linkOpsRepo(input: LinkOpsRepoInput, tx: DbTx): ProjectRow {

@@ -276,6 +276,83 @@ describe("execution.step integration", () => {
     expect(result.status).toBe("completed")
   })
 
+  it("loads jsonl artifact inputs into ctx.inputs as parsed row arrays", async () => {
+    const { linked } = setupSandbox(
+      "jsonl-input-values",
+      `export default {
+  apiVersion: 1,
+  id: "default",
+  version: "0.1.0",
+  name: "Default",
+  steps: [
+    {
+      id: "intake",
+      title: "Intake",
+      artifacts: [
+        {
+          name: "findings",
+          kind: "jsonl",
+          required: true,
+          once: true,
+          schema: {
+            parse(input) {
+              if (!input || typeof input !== "object") {
+                throw new Error("invalid finding")
+              }
+              return input
+            },
+          },
+        },
+      ],
+      async run() {},
+      async on() {},
+    },
+    {
+      id: "plan",
+      title: "Plan",
+      inputs: {
+        artifacts: [
+          {
+            as: "findings",
+            from: { step: "intake", artifact: "findings" },
+            cardinality: { mode: "single", required: true },
+          },
+        ],
+      },
+      async run(ctx) {
+        const findings = ctx.inputs.artifacts.findings
+        if (!Array.isArray(findings) || findings.length !== 2 || findings[1].id !== "b") {
+          throw new Error("missing parsed jsonl artifact rows")
+        }
+        await ctx.completeStep({ ok: true })
+      },
+      async on() {},
+    },
+  ],
+}
+`,
+    )
+
+    const task = await startTask({ projectId: linked.projectId })
+    const intake = await startStep({ taskId: task.taskId, stepKey: "intake" })
+    await writeStepArtifact({
+      taskId: task.taskId,
+      stepId: intake.stepId,
+      artifactName: "findings",
+      artifactKind: "jsonl",
+      payload: { source: "inline", jsonl: '{"id":"a"}\n{"id":"b"}' },
+    })
+    await completeStep({ taskId: task.taskId, stepId: intake.stepId })
+
+    const plan = await startStep({
+      taskId: task.taskId,
+      stepKey: "plan",
+    })
+
+    const result = await executeStep({ taskId: task.taskId, stepId: plan.stepId })
+    expect(result.status).toBe("completed")
+  })
+
   it("supports inline json artifact writes from ctx.writeJsonArtifact", async () => {
     const { linked, opsRoot } = setupSandbox(
       "json-inline-write",

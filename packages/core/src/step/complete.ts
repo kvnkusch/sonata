@@ -58,6 +58,21 @@ function isParserSchema(value: unknown): value is { parse: (input: unknown) => u
   return typeof value === "object" && value !== null && "parse" in value && typeof value.parse === "function"
 }
 
+function parseJsonlArtifact(raw: string, errorContext: string): unknown[] {
+  const rows: unknown[] = []
+  for (const [index, line] of raw.split(/\r?\n/).entries()) {
+    if (line.trim() === "") {
+      continue
+    }
+    try {
+      rows.push(JSON.parse(line))
+    } catch {
+      throw new Error(`Invalid JSONL artifact for ${errorContext} at line ${index + 1}`)
+    }
+  }
+  return rows
+}
+
 function affectedRowCount(result: unknown): number | null {
   if (typeof result !== "object" || result === null) {
     return null
@@ -106,6 +121,14 @@ export async function hydrateStepInputs(input: {
         const raw = await readFile(artifactPath, "utf8")
         if (ref.artifactKind === "markdown") {
           return raw
+        }
+
+        if (ref.artifactKind === "jsonl") {
+          let rows = parseJsonlArtifact(raw, `input ${bindingName}: ${ref.relativePath}`)
+          if (sourceArtifact?.kind === "jsonl" && isParserSchema(sourceArtifact.schema)) {
+            rows = rows.map((row) => sourceArtifact.schema.parse(row))
+          }
+          return toJsonValue(rows, `Artifact ${ref.artifactName}`)
         }
 
         let parsed: unknown
@@ -246,6 +269,19 @@ export function createStepContextBase(input: {
         executor,
       )
       return { kind: "json", path: written.relativePath }
+    },
+    writeJsonlArtifact: async (params) => {
+      const written = await writeArtifactFromExecutionContext(
+        {
+          taskId: input.taskId,
+          stepId: input.stepId,
+          slug: params.slug,
+          kind: "jsonl",
+          payload: { source: "inline", jsonl: params.rows.map((row) => JSON.stringify(row)).join("\n") },
+        },
+        executor,
+      )
+      return { kind: "jsonl", path: written.relativePath }
     },
     completeStep: async (payload?: unknown) => {
       return completeStep(

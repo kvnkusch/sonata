@@ -32,6 +32,11 @@ const intake = defineStep({
       kind: "json",
       schema: z.object({ mode: z.enum(["fast", "safe"]), retries: z.number().int() }),
     },
+    {
+      name: "findings",
+      kind: "jsonl",
+      schema: z.object({ id: z.string(), ok: z.boolean() }),
+    },
   ] as const,
 })
 
@@ -58,6 +63,11 @@ const plan = defineStep({
         as: "config",
         from: { step: "intake", artifact: "config" },
         cardinality: { mode: "single", required: false },
+      },
+      {
+        as: "findings",
+        from: { step: "intake", artifact: "findings" },
+        cardinality: { mode: "single" },
       },
       {
         as: "notes",
@@ -181,6 +191,9 @@ const implementations: WorkflowStepImplementations<typeof workflowBuilder.steps>
       expectTypeOf(ctx.log.info).toEqualTypeOf<(message: string, details?: JsonValue) => void>()
       // @ts-expect-error non-opencode step context does not expose opencode tools
       void ctx.opencode.tools
+      await ctx.writeJsonlArtifact({ slug: "findings", rows: [{ id: "one", ok: true }] })
+      // @ts-expect-error jsonl rows must match the declared row schema
+      await ctx.writeJsonlArtifact({ slug: "findings", rows: [{ id: "one" }] })
       await ctx.completeStep({ ok: true })
     },
     async on() {},
@@ -200,6 +213,7 @@ const implementations: WorkflowStepImplementations<typeof workflowBuilder.steps>
       expectTypeOf(ctx.inputs.invocation).toEqualTypeOf<{ strictness: "low" | "high" }>()
       expectTypeOf(ctx.inputs.artifacts.topic).toEqualTypeOf<string>()
       expectTypeOf(ctx.inputs.artifacts.config?.mode).toEqualTypeOf<"fast" | "safe" | undefined>()
+      expectTypeOf(ctx.inputs.artifacts.findings[0]).toEqualTypeOf<{ id: string; ok: boolean } | undefined>()
       expectTypeOf(ctx.inputs.artifacts.notes[0]).toEqualTypeOf<string | undefined>()
 
       // @ts-expect-error plan step does not declare json artifact slug

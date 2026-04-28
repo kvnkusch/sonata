@@ -8,6 +8,8 @@ import { zodToStrictJsonSchema } from "../workflow/json-schema"
 import {
   jsonArtifactArgsShape,
   jsonArtifactPayloadSchema,
+  jsonlArtifactArgsShape,
+  jsonlArtifactPayloadSchema,
   markdownArtifactArgsShape,
   markdownArtifactPayloadSchema,
 } from "./artifact-args"
@@ -56,7 +58,7 @@ type WriteArtifactToolDeclaration = {
   name: string
   description: string
   artifactName: string
-  artifactKind: "markdown" | "json"
+  artifactKind: "markdown" | "json" | "jsonl"
   inputSchema: Record<string, unknown>
   argsSchema: Record<string, unknown>
 }
@@ -98,6 +100,10 @@ function artifactInputSchema(artifact: WorkflowStepArtifact): Record<string, unk
     return zodToStrictJsonSchema(markdownArtifactPayloadSchema)
   }
 
+  if (artifact.kind === "jsonl") {
+    return zodToStrictJsonSchema(jsonlArtifactPayloadSchema)
+  }
+
   return zodToStrictJsonSchema(
     jsonArtifactPayloadSchema({
       dataSchema: isZodSchema(artifact.schema) ? artifact.schema : undefined,
@@ -136,7 +142,7 @@ export async function getStepToolset(
     kind: artifact.kind,
     required: Boolean(artifact.required),
     once: artifact.once !== false,
-    schema: artifact.kind === "json" && isZodSchema(artifact.schema) ? zodToStrictJsonSchema(artifact.schema) : undefined,
+    schema: (artifact.kind === "json" || artifact.kind === "jsonl") && isZodSchema(artifact.schema) ? zodToStrictJsonSchema(artifact.schema) : undefined,
   }))
 
   const writeTools: WriteArtifactToolDeclaration[] = artifactDeclarations.map((artifact) => {
@@ -150,7 +156,9 @@ export async function getStepToolset(
       argsSchema:
         artifact.kind === "markdown"
           ? markdownArtifactArgsShape
-          : jsonArtifactArgsShape(),
+          : artifact.kind === "jsonl"
+            ? jsonlArtifactArgsShape
+            : jsonArtifactArgsShape(),
     }
   })
 

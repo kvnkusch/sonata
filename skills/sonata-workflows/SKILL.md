@@ -43,6 +43,16 @@ compatibility: opencode
 - For large JSON artifacts, stage JSON in `SONATA_OPS_ROOT/.sonata/staging/<taskId>/<stepId>/...` and pass the staged file path to the JSON artifact tool when supported.
 - Never complete a parent step just because child work was spawned. Completion depends on the declared wait condition and guards.
 
+## OpenCode Sessions
+
+- Treat OpenCode session participation as separate from step semantics. Do not introduce autonomous/interactive step modes; use prompts to describe when the agent should consult the user or wait for confirmation.
+- Configure default CLI joining with `opencode.session.join`: `auto` attaches immediately, `ask` prompts before attaching, and `background` starts or resumes the session without auto-attaching.
+- `background` is not a deny policy. Any OpenCode-backed step with a stored session remains manually attachable as an escape hatch.
+- Use `sonata step sessions --task-id <taskId>` to discover stored OpenCode sessions for a task.
+- Use `sonata step attach <stepId> --task-id <taskId>` to manually join a stored OpenCode session.
+- If a stored `opencodeBaseUrl` is stale, manual attach may fail. Do not assume Sonata can restart the OpenCode server unless that behavior has been explicitly implemented.
+- When debugging OpenCode session behavior, inspect both the Sonata step state and the session metadata: `sessionId`, `opencodeBaseUrl`, status, parent step, and work key.
+
 ## Common Failure Patterns
 
 - Missing required artifact: the step completed before writing all required artifacts, or the artifact name/kind does not match the declaration.
@@ -51,6 +61,7 @@ compatibility: opencode
 - Waiting parent stuck: children are blocked, failed, orphaned, or missing required artifacts for a completion guard.
 - Fan-out duplicates: unstable `workKey` values caused duplicate or conflicting child steps.
 - OpenCode bridge unavailable: the session started without required Sonata bridge tools or with incorrect environment variables.
+- OpenCode session stale: the step has a stored `sessionId` and `opencodeBaseUrl`, but the OpenCode server is no longer reachable.
 - Hidden context dependency: workflow code reads current repo state instead of declared invocation/artifact inputs, making retries and child steps inconsistent.
 
 ## Safety Rules

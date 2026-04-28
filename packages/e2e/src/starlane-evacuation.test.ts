@@ -202,6 +202,18 @@ describe("starlane evacuation e2e", () => {
     expect(
       artifacts.filter((artifact) => artifact.artifactName === "sector_report"),
     ).toHaveLength(3);
+    const surveyEventArtifacts = artifacts.filter(
+      (artifact) => artifact.artifactName === "survey_events",
+    );
+    expect(surveyEventArtifacts).toHaveLength(3);
+    expect(surveyEventArtifacts.every((artifact) => artifact.artifactKind === "jsonl"))
+      .toBe(true);
+    const firstSurveyEvents = readFileSync(
+      path.join(sandbox.opsRoot, surveyEventArtifacts[0]!.relativePath),
+      "utf8",
+    );
+    expect(firstSurveyEvents).toContain('"event":"survey-started"');
+    expect(firstSurveyEvents.trim().split("\n")).toHaveLength(2);
 
     const planArtifact = artifacts.find(
       (artifact) =>

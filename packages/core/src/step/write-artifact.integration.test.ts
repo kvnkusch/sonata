@@ -36,6 +36,7 @@ function writeOpsWorkflowFiles(opsRoot: string) {
       artifacts: [
         { name: "ticket_summary", kind: "markdown", required: true, once: true },
         { name: "plan_structured", kind: "json", once: false, schema: { parse: (value) => value } },
+        { name: "findings", kind: "jsonl", once: false, schema: { parse: (value) => value } },
       ],
       async run() {},
       async on() {},
@@ -117,6 +118,62 @@ describe("step.writeArtifact integration", () => {
     expect(artifactRows).toHaveLength(2)
     expect(eventRows.filter((row) => row.eventType === "artifact.written")).toHaveLength(2)
     expect(eventRows.every((row) => row.eventVersion === 1)).toBe(true)
+  })
+
+  it("writes and validates jsonl artifacts from staged files", async () => {
+    const sandbox = mkdtempSync(path.join(tmpdir(), "sonata-write-artifact-"))
+    tempDirs.push(sandbox)
+
+    const projectRoot = path.join(sandbox, "project")
+    const opsRoot = path.join(sandbox, "ops")
+    mkdirSync(path.join(projectRoot, ".git"), { recursive: true })
+    mkdirSync(opsRoot, { recursive: true })
+    writeOpsWorkflowFiles(opsRoot)
+
+    process.env.SONATA_DB_PATH = path.join(sandbox, "db", "sonata.db")
+
+    const linked = db().transaction((tx) => {
+      return linkOpsRepo({ projectRoot, opsRoot, projectId: "prj_write_jsonl" }, tx)
+    })
+
+    const started = await startTask({
+      projectId: linked.projectId,
+      workflowRef: { name: "default" },
+    })
+    const initial = await startStep({ taskId: started.taskId, stepKey: "plan" })
+
+    const stagingDir = path.join(opsRoot, ".sonata", "staging", started.taskId, initial.stepId)
+    mkdirSync(stagingDir, { recursive: true })
+    const stagedPath = path.join(stagingDir, "findings.jsonl")
+    writeFileSync(stagedPath, '{"id":"a","ok":true}\n{"id":"b","ok":false}\n', "utf8")
+
+    const result = await writeStepArtifact({
+      taskId: started.taskId,
+      stepId: initial.stepId,
+      artifactName: "findings",
+      artifactKind: "jsonl",
+      payload: { source: "file", filePath: stagedPath },
+    })
+
+    expect(result.relativePath).toContain(`tasks/${started.taskId}/001-plan-findings.jsonl`)
+    expect(readFileSync(path.join(opsRoot, result.relativePath), "utf8")).toBe(
+      '{"id":"a","ok":true}\n{"id":"b","ok":false}\n',
+    )
+    expect(existsSync(stagedPath)).toBe(false)
+
+    const badPath = path.join(stagingDir, "bad-findings.jsonl")
+    mkdirSync(stagingDir, { recursive: true })
+    writeFileSync(badPath, '{"id":"a"}\n{"id":}\n', "utf8")
+
+    await expect(
+      writeStepArtifact({
+        taskId: started.taskId,
+        stepId: initial.stepId,
+        artifactName: "findings",
+        artifactKind: "jsonl",
+        payload: { source: "file", filePath: badPath },
+      }),
+    ).rejects.toThrow("JSONL validation failed:\n2 <json>:")
   })
 
   it("treats same-content replay as idempotent and rejects changed write-once content", async () => {

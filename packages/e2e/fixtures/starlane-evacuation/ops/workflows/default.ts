@@ -22,6 +22,12 @@ type SectorReport = {
   riskLevel: string;
 };
 
+type SurveyEvent = {
+  sector: SectorName;
+  event: string;
+  priority: number;
+};
+
 const routes: Record<SectorName, string> = {
   aurora: "Lighthouse Corridor",
   cinder: "Magnetar Slipway",
@@ -88,6 +94,36 @@ function parseSectorReport(input: unknown): SectorReport {
   };
 }
 
+function parseSurveyEvent(input: unknown): SurveyEvent {
+  if (!input || typeof input !== "object") {
+    throw new Error("survey_events row must be an object");
+  }
+
+  const event = input as {
+    sector?: unknown;
+    event?: unknown;
+    priority?: unknown;
+  };
+  if (
+    typeof event.sector !== "string" ||
+    !sectors.includes(event.sector as SectorName)
+  ) {
+    throw new Error(`Invalid event sector: ${String(event.sector)}`);
+  }
+  if (typeof event.event !== "string" || event.event.trim().length === 0) {
+    throw new Error("survey_events.event must be a non-empty string");
+  }
+  if (!Number.isInteger(event.priority)) {
+    throw new Error("survey_events.priority must be an integer");
+  }
+
+  return {
+    sector: event.sector as SectorName,
+    event: event.event,
+    priority: Number(event.priority),
+  };
+}
+
 const missionControl = defineStep({
   id: "mission_control",
   title: "Mission Control",
@@ -112,6 +148,15 @@ const surveySector = defineStep({
       kind: "json",
       schema: {
         parse: parseSectorReport,
+      },
+      required: true,
+      once: true,
+    },
+    {
+      name: "survey_events",
+      kind: "jsonl",
+      schema: {
+        parse: parseSurveyEvent,
       },
       required: true,
       once: true,
@@ -244,6 +289,13 @@ export default workflow.implement({
       };
 
       await ctx.writeJsonArtifact({ slug: "sector_report", data: report });
+      await ctx.writeJsonlArtifact({
+        slug: "survey_events",
+        rows: [
+          { sector, event: "survey-started", priority: 1 },
+          { sector, event: "route-cleared", priority: 2 },
+        ],
+      });
       return stepResult.completed({
         completionPayload: { sector, route: report.route },
       });

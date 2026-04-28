@@ -8,6 +8,8 @@ export type SharedCtx = {
   lastError: string | null
 }
 
+export type OpenCodeSessionJoinPolicy = "auto" | "ask" | "background"
+
 export type OpenRootStepStatus = "active" | "waiting" | "blocked" | "orphaned"
 
 export type KnownStepStatus = OpenRootStepStatus | "pending" | "completed" | "failed" | "cancelled"
@@ -63,7 +65,13 @@ export type InteractiveEvent =
         status: "active" | "waiting" | "completed" | "blocked" | "failed"
         suggestedNextStepKey: string | null
         failure?: { reason: string; details?: unknown }
-        opencodeSession?: { baseUrl: string; sessionId: string; reused: boolean }
+        opencodeSession?: {
+          baseUrl: string
+          sessionId: string
+          reused: boolean
+          join: OpenCodeSessionJoinPolicy
+          attach: boolean
+        }
       }
   }
   | { type: "STEP_EXECUTE_FAILED"; message: string }
@@ -112,6 +120,7 @@ export type Effect =
   | { type: "EXECUTE_STEP"; taskId: string; stepId: string }
   | { type: "GET_STEP"; taskId: string; stepId: string }
   | { type: "ATTACH_OPENCODE"; projectRoot: string; baseUrl: string; sessionId: string }
+  | { type: "PRINT_OPENCODE_SESSION"; taskId: string; stepId: string; baseUrl: string; sessionId: string }
   | { type: "PRINT_STEP_RESULT" }
   | { type: "PRINT_STEP_DETAILS" }
   | { type: "PRINT_CHILD_STEPS" }
@@ -412,11 +421,22 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
             lastError: null,
           }
 
-          const attachEffect = event.result.opencodeSession
+          const attachEffect = event.result.opencodeSession?.attach
             ? ([
                 {
                   type: "ATTACH_OPENCODE",
                   projectRoot: state.shared.projectRoot,
+                  baseUrl: event.result.opencodeSession.baseUrl,
+                  sessionId: event.result.opencodeSession.sessionId,
+                },
+              ] as Effect[])
+            : []
+          const sessionInfoEffect = event.result.opencodeSession && !event.result.opencodeSession.attach
+            ? ([
+                {
+                  type: "PRINT_OPENCODE_SESSION",
+                  taskId: state.taskId,
+                  stepId: state.stepId,
                   baseUrl: event.result.opencodeSession.baseUrl,
                   sessionId: event.result.opencodeSession.sessionId,
                 },
@@ -432,6 +452,7 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
               },
               effects: [
                 ...attachEffect,
+                ...sessionInfoEffect,
                 { type: "PRINT_STEP_RESULT" },
                 { type: "CHECK_TASK_ACTIVE", projectId: shared.projectId, taskId: state.taskId },
               ],
@@ -442,7 +463,7 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
             const next = taskContinuationTarget(shared, state.taskId)
             return {
               state: next.state,
-              effects: [...attachEffect, { type: "PRINT_STEP_RESULT" }, ...next.effects],
+              effects: [...attachEffect, ...sessionInfoEffect, { type: "PRINT_STEP_RESULT" }, ...next.effects],
             }
           }
 
@@ -456,9 +477,12 @@ export function transition(state: InteractiveState, event: InteractiveEvent): Tr
             },
             effects: [
               ...attachEffect,
+              ...sessionInfoEffect,
               { type: "PRINT_STEP_RESULT" },
               ...(event.result.status === "active"
-                ? ([{ type: "PROMPT_STEP_ACTIONS", rootStepStatus: "active" }] as Effect[])
+                ? event.result.opencodeSession
+                  ? ([{ type: "GET_STEP", taskId: state.taskId, stepId: state.stepId }] as Effect[])
+                  : ([{ type: "PROMPT_STEP_ACTIONS", rootStepStatus: "active" }] as Effect[])
                 : ([
                     ...(event.result.status === "waiting"
                       ? ([{ type: "EXECUTE_WAITING_CHILDREN", taskId: state.taskId, stepId: state.stepId }] as Effect[])

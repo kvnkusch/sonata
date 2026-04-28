@@ -30,6 +30,7 @@ import type {
   StepContextWithOpenCode,
   StepRunResult,
   OpenCodeConfig,
+  OpenCodeSessionJoinPolicy,
   WorkflowStepWithOpenCode,
 } from "../workflow/module";
 
@@ -49,6 +50,7 @@ export type ExecuteStepResult = {
     baseUrl: string;
     sessionId: string;
     reused: boolean;
+    join: OpenCodeSessionJoinPolicy;
     close?: () => void;
   };
 };
@@ -130,6 +132,7 @@ type ActiveOpenCodeSession = {
   baseUrl: string;
   sessionId: string;
   reused: boolean;
+  join: OpenCodeSessionJoinPolicy;
   close?: () => void;
 };
 
@@ -138,6 +141,10 @@ const SKIP_OPENCODE_PROMPT_ENV = "SONATA_SKIP_OPENCODE_PROMPT_ASYNC";
 
 function isOpenCodeStep(step: unknown): step is WorkflowStepWithOpenCode {
   return typeof step === "object" && step !== null && "opencode" in step;
+}
+
+function openCodeJoinPolicy(config: OpenCodeConfig): OpenCodeSessionJoinPolicy {
+  return config.session?.join ?? "auto";
 }
 
 function safeErrorMessage(error: unknown): string {
@@ -418,6 +425,7 @@ export async function executeStep(
                   baseUrl: current.opencodeBaseUrl,
                   sessionId: current.sessionId,
                   reused: true,
+                  join: openCodeJoinPolicy(workflowStep.opencode),
                 };
                 try {
                   await ctxRef!.log.info("opencode session reused", {
@@ -514,6 +522,7 @@ export async function executeStep(
               baseUrl: server.url,
               sessionId,
               reused: false,
+              join: openCodeJoinPolicy(workflowStep.opencode),
               close: server.close,
             };
             try {

@@ -14,7 +14,7 @@ export const artifactTable = sqliteTable(
       .references(() => stepTable.stepId),
     artifactName: text("artifact_name").notNull(),
     artifactKind: text("artifact_kind", {
-      enum: ["markdown", "json"],
+      enum: ["markdown", "json", "jsonl"],
     }).notNull(),
     relativePath: text("relative_path").notNull(),
     contentHash: text("content_hash").notNull(),

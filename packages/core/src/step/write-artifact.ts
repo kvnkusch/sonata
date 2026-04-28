@@ -18,8 +18,10 @@ import { getDeclaredArtifact } from "./validation"
 import { loadWorkflowStepForTask } from "../workflow/loader"
 import {
   jsonArtifactPayloadSchema,
+  jsonlArtifactPayloadSchema,
   markdownArtifactPayloadSchema,
   type JsonArtifactPayload,
+  type JsonlArtifactPayload,
   type WriteArtifactPayload,
 } from "./artifact-args"
 
@@ -127,6 +129,86 @@ function loadJsonArtifactContent(input: {
   }
 }
 
+function formatPath(path: Array<string | number>): string {
+  return path.length === 0 ? "<root>" : path.join(".")
+}
+
+function formatSchemaError(error: unknown): string {
+  if (typeof error === "object" && error !== null && "issues" in error && Array.isArray(error.issues)) {
+    return error.issues
+      .map((issue: { path?: Array<string | number>; message?: string }) => `${formatPath(issue.path ?? [])}: ${issue.message ?? "Invalid value"}`)
+      .join("; ")
+  }
+  return error instanceof Error ? error.message : String(error)
+}
+
+function parseJsonlContent(input: { content: string; parse: (input: unknown) => unknown }): string {
+  const output: string[] = []
+  const diagnostics: string[] = []
+  const lines = input.content.split(/\r?\n/)
+
+  lines.forEach((line, index) => {
+    if (line.trim() === "") {
+      return
+    }
+
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(line)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      diagnostics.push(`${index + 1} <json>: ${message}`)
+      return
+    }
+
+    try {
+      output.push(JSON.stringify(input.parse(parsed)))
+    } catch (error) {
+      diagnostics.push(`${index + 1} ${formatSchemaError(error)}`)
+    }
+  })
+
+  if (diagnostics.length > 0) {
+    throw new RpcError(ErrorCode.INVALID_INPUT, 400, `JSONL validation failed:\n${diagnostics.join("\n")}`)
+  }
+
+  return output.length === 0 ? "" : `${output.join("\n")}\n`
+}
+
+function loadJsonlArtifactContent(input: {
+  opsRootRealpath: string
+  taskId: string
+  stepId: string
+  payload: unknown
+  parse: (input: unknown) => unknown
+}): { content: string; importedFilePath?: string } {
+  let payload: JsonlArtifactPayload
+  try {
+    payload = jsonlArtifactPayloadSchema.parse(input.payload)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid JSONL artifact payload"
+    throw new RpcError(ErrorCode.INVALID_INPUT, 400, message)
+  }
+
+  if (payload.source === "file") {
+    const importedFilePath = resolveStagedImportPath({
+      opsRootRealpath: input.opsRootRealpath,
+      taskId: input.taskId,
+      stepId: input.stepId,
+      filePath: payload.filePath,
+    })
+
+    return {
+      content: parseJsonlContent({ content: readFileSync(importedFilePath, "utf8"), parse: input.parse }),
+      importedFilePath,
+    }
+  }
+
+  return {
+    content: parseJsonlContent({ content: payload.jsonl, parse: input.parse }),
+  }
+}
+
 function writeAtomicFile(targetPath: string, content: string) {
   const dir = path.dirname(targetPath)
   mkdirSync(dir, { recursive: true })
@@ -148,7 +230,7 @@ export type WriteArtifactInput = {
   taskId: string
   stepId: string
   artifactName: string
-  artifactKind: "markdown" | "json"
+  artifactKind: "markdown" | "json" | "jsonl"
   payload: WriteArtifactPayload
   sessionId?: string
 }
@@ -157,7 +239,7 @@ export type WriteArtifactFromExecutionContextInput = {
   taskId: string
   stepId: string
   slug: string
-  kind: "markdown" | "json"
+  kind: "markdown" | "json" | "jsonl"
   payload: WriteArtifactPayload
   sessionId?: string
 }
@@ -253,10 +335,24 @@ export async function writeStepArtifact(input: WriteArtifactInput, executor: DbE
         })
       : null
 
+  const jsonlPayload =
+    input.artifactKind === "jsonl"
+      ? loadJsonlArtifactContent({
+          opsRootRealpath: project.opsRootRealpath,
+          taskId: input.taskId,
+          stepId: input.stepId,
+          payload: input.payload,
+          parse: (value) =>
+            declaredArtifact.kind === "jsonl" ? declaredArtifact.schema.parse(value) : value,
+        })
+      : null
+
   const content =
     input.artifactKind === "markdown"
       ? `${markdownArtifactPayloadSchema.parse(input.payload).markdown}\n`
-      : jsonPayload!.content
+      : input.artifactKind === "jsonl"
+        ? jsonlPayload!.content
+        : jsonPayload!.content
 
   const relativePath = artifactRelativePath({
     taskId: input.taskId,
@@ -278,14 +374,15 @@ export async function writeStepArtifact(input: WriteArtifactInput, executor: DbE
   const hash = contentHash(content)
 
   const cleanupImportedFile = () => {
-    if (!jsonPayload?.importedFilePath) {
+    const importedFilePath = jsonPayload?.importedFilePath ?? jsonlPayload?.importedFilePath
+    if (!importedFilePath) {
       return
     }
     cleanupImportedStagedFile({
       opsRootRealpath: project.opsRootRealpath,
       taskId: input.taskId,
       stepId: input.stepId,
-      filePath: jsonPayload.importedFilePath,
+      filePath: importedFilePath,
     })
   }
 

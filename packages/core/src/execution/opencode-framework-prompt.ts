@@ -22,6 +22,7 @@ export function composeOpenCodeKickoffPrompt(input: {
   const artifacts = input.artifacts ?? []
   const requiredArtifacts = artifacts.filter((artifact) => Boolean(artifact.required))
   const hasJsonArtifacts = artifacts.some((artifact) => artifact.kind === "json")
+  const hasJsonlArtifacts = artifacts.some((artifact) => artifact.kind === "jsonl")
   const artifactToolLines = artifacts.map((artifact) => `- \`${writeArtifactToolName(artifact)}\` for artifact \`${artifact.name}\``)
   const requiredArtifactLine = requiredArtifacts.length > 0
     ? `- Required artifacts: ${requiredArtifacts.map((artifact) => `\`${artifact.name}\``).join(", ")}.`
@@ -32,6 +33,9 @@ export function composeOpenCodeKickoffPrompt(input: {
   const jsonStagingLine = hasJsonArtifacts
     ? "- For large JSON artifacts, write JSON to `SONATA_OPS_ROOT/.sonata/staging/<taskId>/<stepId>/...` and call the JSON artifact tool with `{ source: \"file\", filePath }`."
     : null
+  const jsonlStagingLine = hasJsonlArtifacts
+    ? "- For large JSONL artifacts, write newline-delimited JSON to `SONATA_OPS_ROOT/.sonata/staging/<taskId>/<stepId>/...` and call the JSONL artifact tool with `{ source: \"file\", filePath }`."
+    : null
 
   const contract = input.contract === "compact"
     ? [
@@ -40,6 +44,7 @@ export function composeOpenCodeKickoffPrompt(input: {
       "- Use frozen step inputs only.",
       "- If blocked on operator/external input, call `sonata_block_step` once with a structured reason.",
       jsonStagingLine,
+      jsonlStagingLine,
       "- After required artifacts are written, call `sonata_complete_step` exactly once and only claim completion if it succeeds.",
       requiredArtifactLine,
       artifactToolBlock,
@@ -50,6 +55,7 @@ export function composeOpenCodeKickoffPrompt(input: {
       "- Use the provided frozen step inputs; do not assume unstated context.",
       "- If the step cannot proceed autonomously and needs operator or external input, call `sonata_block_step` once with a structured reason.",
       jsonStagingLine,
+      jsonlStagingLine,
       "- After required artifacts are written, call `sonata_complete_step` exactly once.",
       "- Do not claim the step is complete unless `sonata_complete_step` succeeds.",
       requiredArtifactLine,

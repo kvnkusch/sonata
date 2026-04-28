@@ -12,7 +12,7 @@ const snapshotSchema = z.object({
         refs: z.array(
           z.object({
             artifactName: z.string(),
-            artifactKind: z.enum(["markdown", "json"]),
+            artifactKind: z.enum(["markdown", "json", "jsonl"]),
             relativePath: z.string(),
             stepId: z.string(),
             stepKey: z.string(),

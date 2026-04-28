@@ -12,7 +12,7 @@ export type ArtifactSelectionOverride = {
 
 export type ArtifactCandidate = {
   artifactName: string
-  artifactKind: "markdown" | "json"
+  artifactKind: "markdown" | "json" | "jsonl"
   relativePath: string
   stepId: string
   stepKey: string

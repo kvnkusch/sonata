@@ -8,6 +8,7 @@ import { collectStepInputs } from "./collect-step-inputs";
 import type {
   Effect,
   InteractiveEvent,
+  OpenCodeSessionJoinPolicy,
   OpenRootStepStatus,
   SharedCtx,
 } from "./machine";
@@ -142,6 +143,27 @@ function isAttachableChildStatus(status: string): boolean {
     status === "blocked" ||
     status === "orphaned"
   );
+}
+
+async function shouldAttachOpencodeSession(input: {
+  prompts: EffectRunnerDeps["prompts"];
+  join: OpenCodeSessionJoinPolicy;
+}): Promise<boolean> {
+  if (input.join === "auto") {
+    return true;
+  }
+  if (input.join === "background") {
+    return false;
+  }
+
+  const action = await input.prompts.select({
+    message: "Join OpenCode session?",
+    options: [
+      { label: "Join now", value: "join" },
+      { label: "Continue in background", value: "background" },
+    ],
+  });
+  return !input.prompts.isCancel(action) && action === "join";
 }
 
 function childMatchesWaitSpec(
@@ -429,6 +451,12 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
             suggestedNextStepKey: result.suggestedNextStepKey,
             ...(result.failure ? { failure: result.failure } : {}),
           };
+          const attach = result.opencode
+            ? await shouldAttachOpencodeSession({
+                prompts: deps.prompts,
+                join: result.opencode.join,
+              })
+            : false;
           return [
             {
               type: "STEP_EXECUTE_OK",
@@ -441,6 +469,8 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
                       baseUrl: result.opencode.baseUrl,
                       sessionId: result.opencode.sessionId,
                       reused: result.opencode.reused,
+                      join: result.opencode.join,
+                      attach,
                     }
                   : undefined,
               },
@@ -460,6 +490,15 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
           sessionId: effect.sessionId,
           env: {},
         });
+        return [];
+      }
+
+      case "PRINT_OPENCODE_SESSION": {
+        deps.ui.println("step_id:", effect.stepId);
+        deps.ui.println("task_id:", effect.taskId);
+        deps.ui.println("opencode_session:", effect.sessionId);
+        deps.ui.println("opencode_base_url:", effect.baseUrl);
+        deps.ui.println("attach_command:", `sonata step attach ${effect.stepId} --task-id ${effect.taskId}`);
         return [];
       }
 
@@ -812,7 +851,7 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
 
       case "PROMPT_STEP_ACTIONS": {
         const attachAvailable =
-          effect.rootStepStatus === "blocked" &&
+          (effect.rootStepStatus === "active" || effect.rootStepStatus === "blocked") &&
           runtime.lastStepDetail?.sessionId !== null &&
           typeof runtime.lastStepDetail?.sessionId === "string" &&
           runtime.lastStepDetail?.opencodeBaseUrl !== null &&
@@ -836,6 +875,14 @@ export function createEffectRunner(deps: EffectRunnerDeps) {
         const options =
           effect.rootStepStatus === "active"
             ? [
+                ...(attachAvailable
+                  ? ([
+                      {
+                        label: "Attach to existing session",
+                        value: "attach",
+                      },
+                    ] as const)
+                  : []),
                 { label: "Retry step", value: "retry" },
                 { label: "Mark failed", value: "fail" },
                 { label: "Cancel step", value: "cancel" },

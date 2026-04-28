@@ -61,6 +61,7 @@ export default {
       artifacts: [
         { name: "ticket_summary", kind: "markdown", required: true, once: true },
         { name: "plan_structured", kind: "json", required: false, once: true, schema: { parse: (value) => value } },
+        { name: "findings", kind: "jsonl", required: false, once: true, schema: z.object({ id: z.string() }) },
       ],
       async run() {},
       async on() {},
@@ -135,10 +136,12 @@ export default {
     expect(toolsetA.artifacts.map((artifact) => artifact.name)).toEqual([
       "ticket_summary",
       "plan_structured",
+      "findings",
     ])
     expect(toolsetA.tools.map((tool) => tool.name)).toEqual([
       "sonata_write_ticket_summary_artifact_markdown",
       "sonata_write_plan_structured_artifact_json",
+      "sonata_write_findings_artifact_jsonl",
       "sonata_step_plan__fetch_context",
       "sonata_block_step",
       "sonata_complete_step",
@@ -165,6 +168,34 @@ export default {
               type: "string",
               minLength: 1,
               description: "Path under opsRoot/.sonata/staging/<taskId>/<stepId>/ containing the JSON payload to import",
+            },
+          },
+          required: ["source", "filePath"],
+        },
+      ],
+    })
+    const jsonlTool = toolsetA.tools.find((tool) => tool.name === "sonata_write_findings_artifact_jsonl")
+    expect(jsonlTool?.inputSchema).toEqual({
+      $schema: "http://json-schema.org/draft-07/schema#",
+      anyOf: [
+        {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            source: { type: "string", const: "inline" },
+            jsonl: { type: "string", minLength: 1 },
+          },
+          required: ["source", "jsonl"],
+        },
+        {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            source: { type: "string", const: "file" },
+            filePath: {
+              type: "string",
+              minLength: 1,
+              description: "Path under opsRoot/.sonata/staging/<taskId>/<stepId>/ containing the JSONL payload to import",
             },
           },
           required: ["source", "filePath"],

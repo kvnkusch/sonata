@@ -450,6 +450,7 @@ describe("interactive effect runner", () => {
             baseUrl: "http://127.0.0.1:1234",
             sessionId: "ses_1",
             reused: false,
+            join: "auto",
           },
         };
       },
@@ -472,6 +473,8 @@ describe("interactive effect runner", () => {
             baseUrl: "http://127.0.0.1:1234",
             sessionId: "ses_1",
             reused: false,
+            join: "auto",
+            attach: true,
           },
         },
       },
@@ -480,6 +483,166 @@ describe("interactive effect runner", () => {
       status: "blocked",
       suggestedNextStepKey: "implement",
     });
+  });
+
+  it("marks ask join sessions for background when declined", async () => {
+    const runEffect = createEffectRunner({
+      prompts: makePrompts("background"),
+      ui: { println() {}, error() {} },
+      async ensureLinkedProject() {
+        return {
+          projectId: "prj_test",
+          projectRoot: "/tmp/project",
+          opsRoot: "/tmp/ops",
+        };
+      },
+      readOpsConfig,
+      async loadWorkflowForTask() {
+        return { workflow: { steps: [] } } as never;
+      },
+      async collectStepInputs() {
+        return {};
+      },
+      async executeStep() {
+        return {
+          status: "active" as const,
+          suggestedNextStepKey: null,
+          opencode: {
+            baseUrl: "http://127.0.0.1:1234",
+            sessionId: "ses_ask",
+            reused: false,
+            join: "ask" as const,
+          },
+        };
+      },
+      async attachOpencodeTui() {},
+    });
+
+    const result = await runEffect(
+      { type: "EXECUTE_STEP", taskId: "tsk_1", stepId: "stp_1" },
+      makeRuntime(),
+    );
+
+    expect(result).toEqual([
+      {
+        type: "STEP_EXECUTE_OK",
+        result: {
+          status: "active",
+          suggestedNextStepKey: null,
+          opencodeSession: {
+            baseUrl: "http://127.0.0.1:1234",
+            sessionId: "ses_ask",
+            reused: false,
+            join: "ask",
+            attach: false,
+          },
+        },
+      },
+    ]);
+  });
+
+  it("marks ask join sessions for background when cancelled", async () => {
+    const runEffect = createEffectRunner({
+      prompts: makePrompts(CANCEL),
+      ui: { println() {}, error() {} },
+      async ensureLinkedProject() {
+        return {
+          projectId: "prj_test",
+          projectRoot: "/tmp/project",
+          opsRoot: "/tmp/ops",
+        };
+      },
+      readOpsConfig,
+      async loadWorkflowForTask() {
+        return { workflow: { steps: [] } } as never;
+      },
+      async collectStepInputs() {
+        return {};
+      },
+      async executeStep() {
+        return {
+          status: "active" as const,
+          suggestedNextStepKey: null,
+          opencode: {
+            baseUrl: "http://127.0.0.1:1234",
+            sessionId: "ses_cancelled_ask",
+            reused: false,
+            join: "ask" as const,
+          },
+        };
+      },
+      async attachOpencodeTui() {},
+    });
+
+    const result = await runEffect(
+      { type: "EXECUTE_STEP", taskId: "tsk_1", stepId: "stp_1" },
+      makeRuntime(),
+    );
+
+    expect(result).toEqual([
+      {
+        type: "STEP_EXECUTE_OK",
+        result: {
+          status: "active",
+          suggestedNextStepKey: null,
+          opencodeSession: {
+            baseUrl: "http://127.0.0.1:1234",
+            sessionId: "ses_cancelled_ask",
+            reused: false,
+            join: "ask",
+            attach: false,
+          },
+        },
+      },
+    ]);
+  });
+
+  it("prints attach details for background sessions", async () => {
+    const lines: string[] = [];
+    const runEffect = createEffectRunner({
+      prompts: makePrompts("start"),
+      ui: {
+        println(...args: string[]) {
+          lines.push(args.join(" "));
+        },
+        error() {},
+      },
+      async ensureLinkedProject() {
+        return {
+          projectId: "prj_test",
+          projectRoot: "/tmp/project",
+          opsRoot: "/tmp/ops",
+        };
+      },
+      readOpsConfig,
+      async loadWorkflowForTask() {
+        return { workflow: { steps: [] } } as never;
+      },
+      async collectStepInputs() {
+        return {};
+      },
+      async executeStep() {
+        return { status: "completed" as const, suggestedNextStepKey: null };
+      },
+      async attachOpencodeTui() {},
+    });
+
+    await runEffect(
+      {
+        type: "PRINT_OPENCODE_SESSION",
+        taskId: "tsk_1",
+        stepId: "stp_1",
+        baseUrl: "http://127.0.0.1:1234",
+        sessionId: "ses_bg",
+      },
+      makeRuntime(),
+    );
+
+    expect(lines).toContain("step_id: stp_1");
+    expect(lines).toContain("task_id: tsk_1");
+    expect(lines).toContain("opencode_session: ses_bg");
+    expect(lines).toContain("opencode_base_url: http://127.0.0.1:1234");
+    expect(lines).toContain("attach_command: sonata step attach stp_1 --task-id tsk_1");
   });
 
   it("maps task continuation selections to lifecycle events", async () => {

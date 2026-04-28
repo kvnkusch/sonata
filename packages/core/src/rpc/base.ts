@@ -1,6 +1,7 @@
 import z from "zod"
 import {
   jsonArtifactPayloadSchema,
+  jsonlArtifactPayloadSchema,
   markdownArtifactPayloadSchema,
 } from "../step/artifact-args"
 
@@ -124,6 +125,11 @@ export const StepWriteArtifactInput = z.discriminatedUnion("artifactKind", [
     ...StepWriteArtifactBase,
     artifactKind: z.literal("json"),
     payload: jsonArtifactPayloadSchema(),
+  }),
+  z.object({
+    ...StepWriteArtifactBase,
+    artifactKind: z.literal("jsonl"),
+    payload: jsonlArtifactPayloadSchema,
   }),
 ])
 
